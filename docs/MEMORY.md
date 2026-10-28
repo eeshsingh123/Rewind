@@ -10,10 +10,10 @@ Last updated: 2026-10-29
 - On `main`:
   - T0 Foundations (PR #1): Contracts v1, the seven core ports, settings, `/health`, `uv run poe check` locally and in CI. Conventions in D-13.
   - T2 Perception P0 (PR #2, D-15): ingest with proxy and time map, idle skip, SAM 3.1 video and image adapters, Parquet observation cache, `dense_track` planner, ledger and budget decorators, `LocalDiskBlobStore`. Wiring: `rewind.app.perception.build_perception(settings, httpx_client)`, then `perception.video(BudgetScope(workspace_id, job_id))`. Smoke: `uv run python scripts/smoke_perception.py CLIP --concept X`. Mask decoding costs about 0.1 s per mask of CPU.
-- In review: T3 Rules (PR #3, `feat/t3-rules`): engine, compiler, Muse adapter. `main` is merged in, `poe check` is green with 71 tests, and it has no conflicts. Its proposed rule semantics become D-16 when it merges (1.0 s checkpoint window, `exits_view` = last sighting, one violation per item per checkpoint, `zone_phrases` returned next to the spec). Its 4 open questions in the PR still need the owner's answers.
+  - T3 Rules (PR #3, D-16): the deterministic engine with a predicate registry, zones (`view_exit`, drawn, `find_zone()` by text), `RuleCompiler` (cached, with `zone_phrases`) and `MuseLanguageModel`. Smoke: `uv run python scripts/smoke_rules.py`; re-record `tests/recordings/muse/compile_examples.json` whenever the compile prompt or schema changes. Its 4 open questions are under Open questions.
 - Running, each in a fresh session and worktree started from the earlier WIP:
   - T1 Sim, continued, from WIP `05bff2f`: tests, docs, full renders, the 10-item check, the SAM realism probe, and a preview page for the owner.
-  - T4 Chat, continued, from 4 local commits (SQL repository on SQLite, job runner, conversation core). First merges `main`, then Telegram, WhatsApp, the upload page and app wiring. The rule and analysis tools wait until PR #3 merges. The owner approved the mockup (https://claude.ai/artifact/6TTGFqUvVdzidBVGUs66YE) and its proposals: SQLite until Neon, a thin `core/analysis` job with naive tracks by SAM object id, a plain ffmpeg clip until T5, and an allowlist of senders.
+  - T4 Chat, continued, from 4 local commits (SQL repository on SQLite, job runner, conversation core). First merges `main` (T2 and T3 are both there now), then Telegram, WhatsApp, the upload page, app wiring, and the rule and analysis tools. The owner approved the mockup (https://claude.ai/artifact/6TTGFqUvVdzidBVGUs66YE) and its proposals: SQLite until Neon, a thin `core/analysis` job with naive tracks by SAM object id, a plain ffmpeg clip until T5, and an allowlist of senders.
 - The first, unfinished T1 and T4 sessions and the done T2 and T3 sessions can be archived once their work is merged. The old local branches `claude/t1-sim-646423` and `feat/t4-chat` are superseded by the new sessions' branches.
 - Track sessions do not edit MEMORY.md or DECISIONS.md. They put state and proposed decisions in the PR description, and the coordinator merges them in.
 - Integration notes for whoever wires things: there are two `TokenPrices` classes (the Muse adapter's and the budget guard's), so pick one source of prices. T2's `JsonlCostLog` and T4's `SqlRepository` both store costs, so keep one.
@@ -44,8 +44,8 @@ Judges use three things: the demo video, the code, and the live product.
 
 ## Next
 
-1. The owner merges PR #3 (T3), then this docs PR. T4 continued then builds its rule and analysis tools.
-2. T1 and T4 open their PRs. The owner reviews and merges them, and the coordinator records D-16 and any new decisions.
+1. The owner merges this docs PR (#4).
+2. T1 and T4 open their PRs. The owner reviews and merges them, and the coordinator records any new decisions.
 3. Then T5 Evidence (boxes on clips, QR order links, insights) and T7 Evaluation (scores against T1's ground truth), two at a time. T6 Web after that, mockup first.
 4. T8 Submission last: README, demo video and the written answers.
 
@@ -53,4 +53,4 @@ Judges use three things: the demo video, the code, and the live product.
 
 - Product name (the repo is `Rewind`; the name can still change).
 - Judges look at the "live product". Is a working Telegram bot plus a tunnel to the owner's machine during judging enough, or does T8 need an always-on host (D-12)?
-- T3's open questions (PR #3): `end_of_footage` for items that left earlier, the "4 flaps before tape" approximation, whether `exits_view` needs a frame edge, fixed or sliding rate windows. T1 raised the first one too.
+- T3's open questions (D-16 uses the current answers until the owner decides): `end_of_footage` for items that left earlier, the "4 flaps before tape" approximation, whether `exits_view` needs a frame edge, fixed or sliding rate windows. T1 raised the first one too.
