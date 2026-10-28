@@ -89,6 +89,11 @@ Why: these choices are shared by T1–T5; changing one later means a contract PR
 The language model id is the setting `REWIND_MUSE_MODEL`, which defaults to `muse-spark-1.3-contributor`. `muse-spark-1.3` is the drop-in alternative for footage that must not be used for training; switching is a change to the setting only.
 Why: it has every feature we need (S0) and costs about 12–20× less. Limits: Meta may train on everything sent to it (fine for sim and stock footage), and it allows 150 requests per minute per team, so bursts of yes/no checks queue and back off on 429.
 
+### D-15 Perception P0 (T2) — accepted (2026-10-29)
+
+Idle skip measures frame differences inside the zones, not MOG2. The proxy for a plan is its spans joined at its fps, and its time map comes from ffmpeg, so the frames billed equal the frames mapped. There is one SAM request per (concept, fps) over every window, split only at 15,000 frames. On a partial cache hit, only the uncached frames are sent. The cache is Parquet per `(content_hash, model_version, concept)`, with a row per original-footage frame index, and empty frames are cached too. The kill switch counts all-time spend across workspaces: $120 by default, never above $140. A failed paid call keeps its estimate as an unconfirmed entry that counts toward the caps. Every paid port reaches callers only through the budget decorators.
+Why: a background model learns a busy line as background and reports it idle, and a skipped span is a missed violation. A failed call may still be billed.
+
 ## Done
 
 (nothing yet)

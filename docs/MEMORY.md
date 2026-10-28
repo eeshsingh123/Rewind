@@ -1,45 +1,56 @@
 # Memory
 
-Last updated: 2026-10-28
+Last updated: 2026-10-29
 
 ## State
 
 - Discussion done: product (D-1), architecture (D-2, D-3), stack (D-4), cost strategy (D-6), channels (D-8), sim bench (D-9), parallel tracks and session effort (D-11), local-first runtime without Modal (D-12), Muse model (D-14).
-- S0 is done for the Meta models: SAM 3.1 and Muse Spark are both enabled, and D-6 now has the confirmed figures. Findings and recordings are in the uncommitted `spikes/s0/`; T2 copies the recordings it needs into `tests/recordings/`. The WhatsApp and Telegram checks are still open.
-- T0 Foundations is built on `t0-foundations`, with its PR open and waiting for the owner to merge. It has Contracts v1, the seven core ports (`Segmenter` and `LanguageModel` already shaped by S0: object prompts, the 50-frame floor, tools, images and effort), settings, `/health`, and `uv run poe check` (ruff, pyright, import-linter, pytest) running locally and in CI. Contract conventions are in D-13 (accepted).
-- `main` is protected: a PR is required (admins too) and force-push is blocked. The `check` status is required.
-- Contracts v1 also has the `Line`, `Footage` and `Rule` records and their `Repository` methods, so T2 (footage), T3 (rules) and T4 (lines) need no contract PR.
-- Next: after T0 merges, start T3 Rules (high) and T2 Perception (medium) first, at most two sessions at once (D-11), each with a standalone brief (AGENTS.md). Then T1 Sim (needs the Hugging Face token), then T4 Chat (mockup first; needs the Telegram, WhatsApp and Neon tokens). T1 can keep pydantic out of Blender: `sim/render.py` runs under the project's Python and drives Blender as a subprocess; only the builders run inside Blender, and the ground truth is validated against the contracts on the project side.
+- S0 is done for the Meta models. Findings and the raw recordings are in the git-ignored `spikes/s0/` (only in the main checkout). The WhatsApp and Telegram checks happen in T4's live smoke.
+- `main` is protected: a PR is required (admins too), force-push is blocked, and the `check` status is required.
+- On `main`:
+  - T0 Foundations (PR #1): Contracts v1, the seven core ports, settings, `/health`, `uv run poe check` locally and in CI. Conventions in D-13.
+  - T2 Perception P0 (PR #2, D-15): ingest with proxy and time map, idle skip, SAM 3.1 video and image adapters, Parquet observation cache, `dense_track` planner, ledger and budget decorators, `LocalDiskBlobStore`. Wiring: `rewind.app.perception.build_perception(settings, httpx_client)`, then `perception.video(BudgetScope(workspace_id, job_id))`. Smoke: `uv run python scripts/smoke_perception.py CLIP --concept X`. Mask decoding costs about 0.1 s per mask of CPU.
+- In review: T3 Rules (PR #3, `feat/t3-rules`): engine, compiler, Muse adapter. `main` is merged in, `poe check` is green with 71 tests, and it has no conflicts. Its proposed rule semantics become D-16 when it merges (1.0 s checkpoint window, `exits_view` = last sighting, one violation per item per checkpoint, `zone_phrases` returned next to the spec). Its 4 open questions in the PR still need the owner's answers.
+- Running, each in a fresh session and worktree started from the earlier WIP:
+  - T1 Sim, continued, from WIP `05bff2f`: tests, docs, full renders, the 10-item check, the SAM realism probe, and a preview page for the owner.
+  - T4 Chat, continued, from 4 local commits (SQL repository on SQLite, job runner, conversation core). First merges `main`, then Telegram, WhatsApp, the upload page and app wiring. The rule and analysis tools wait until PR #3 merges. The owner approved the mockup (https://claude.ai/artifact/6TTGFqUvVdzidBVGUs66YE) and its proposals: SQLite until Neon, a thin `core/analysis` job with naive tracks by SAM object id, a plain ffmpeg clip until T5, and an allowlist of senders.
+- The first, unfinished T1 and T4 sessions and the done T2 and T3 sessions can be archived once their work is merged. The old local branches `claude/t1-sim-646423` and `feat/t4-chat` are superseded by the new sessions' branches.
+- Track sessions do not edit MEMORY.md or DECISIONS.md. They put state and proposed decisions in the PR description, and the coordinator merges them in.
+- Integration notes for whoever wires things: there are two `TokenPrices` classes (the Muse adapter's and the budget guard's), so pick one source of prices. T2's `JsonlCostLog` and T4's `SqlRepository` both store costs, so keep one.
+- A real stock clip for smoke runs and demos: `data/stock/pexels_5903898_packages_conveyor_720p.mp4` in the main checkout (credit in `CREDITS.txt` beside it; credit it in the README).
 
 ## Blockers the owner sets up
 
-Needed for T0:
-- [x] Empty GitHub repo `Rewind`. `gh` is signed in as eeshsingh123.
-- [x] `cloudflared` 2026.10.5 installed at `C:\Program Files (x86)\cloudflared\cloudflared.exe` (open a new shell for PATH). `/health` returned 200 through a quick tunnel: `uv run poe serve`, then `cloudflared tunnel --url http://localhost:8000`.
+- [x] GitHub repo `Rewind`; `gh` signed in as eeshsingh123.
+- [x] `cloudflared` at `C:\Program Files (x86)\cloudflared\cloudflared.exe`. Quick tunnel: `uv run poe serve`, then `cloudflared tunnel --url http://localhost:8000`.
+- [x] Meta Model API key as the user variable `META_API_KEY`; `HF_TOKEN` likewise. Both are user-level, so a session started before they were set may not see them: in PowerShell, `$env:NAME = [Environment]::GetEnvironmentVariable('NAME','User')`. Never print them.
+- [x] Blender 4.5 LTS (see Machine).
+- [ ] Telegram, needed for T4's live smoke: `REWIND_TELEGRAM_BOT_TOKEN` and `REWIND_TELEGRAM_ALLOWED_USER_IDS`, as user variables.
+- [ ] WhatsApp, second channel: `REWIND_WHATSAPP_TOKEN` (system user, never expires), `REWIND_WHATSAPP_PHONE_NUMBER_ID`, `REWIND_WHATSAPP_APP_ID`, `REWIND_WHATSAPP_APP_SECRET`, `REWIND_WHATSAPP_VERIFY_TOKEN` (any string), `REWIND_WHATSAPP_ALLOWED_NUMBERS`. The owner's phone is a test recipient and has messaged the test number once.
+- [ ] Neon Postgres: not needed until after T4 (SQLite for now; switching is a URL change plus Alembic).
+- [ ] Optional: Modal credit (D-12), and Fireworks or Baseten credits for a fallback model.
 
-Needed for S0 (the Meta half is done; the channel half blocks T4):
-- [x] Meta Model API key, in the user environment as `META_API_KEY`. Read it only through settings; never print it. SAM 3.1 and Muse Spark are both enabled on it.
-- [x] API reference: public, no login, at `https://dev.meta.ai/docs/*.md` (index `https://dev.meta.ai/llms.txt`).
-- [ ] WhatsApp: Meta developer app with WhatsApp added, test number id, a **system user token** (the temporary token expires in 24 h), the owner's phone added as a test recipient.
-- [ ] Telegram: bot token from @BotFather.
-- [ ] Neon Postgres project and connection string.
+## Submission (T8)
 
-Needed for T1:
-- [x] Blender 4.5 LTS installed with winget (see Machine for the path).
-- [ ] Hugging Face token (SimReady download).
-
-Needed later:
-- [ ] Modal credit (optional, D-12): if it arrives, add the Modal adapters and entry point.
-- [ ] Fireworks and/or Baseten credits requested (fallback language model).
-- [ ] 2–3 free stock clips of real bottling or packaging lines picked (Pexels/Pixabay) for the sim-to-real check.
-- [ ] The official submission rules: video length, whether the repo must be public, required Meta models.
+Judges use three things: the demo video, the code, and the live product.
+- Public GitHub repository (check it opens logged out).
+- A 3-minute demo video on YouTube (`https://youtube.com/watch?v=...`), showing the features, code and functionality built during the hackathon. Check the link opens logged out.
+- Everyone who worked on the project listed on the submission page.
+- Written answers: how we used Meta products; why Meta's models matter to the solution; feedback on using Meta products. Feedback material from S0 and the tracks: SAM has no fps setting, a 50-frame floor and one concept per request; usage is missing on background polls; the compile prompt hit the cache only with `prompt_cache_key`; SAM masks are slow to decode in Python.
 
 ## Machine
 
-- Windows 11, GTX 1650 4 GB (driver 616.64), 8 GB RAM. Python 3.14 is global; the project pins 3.12 through uv (0.9.21). ffmpeg 8.0.1 runs from the Downloads folder (on PATH). Blender 4.5 LTS: `C:\Program Files\Blender Foundation\Blender 4.5\blender.exe` (4.5.10, not on PATH; T1 reads it from a setting). Docker Desktop is installed.
+- Windows 11, GTX 1650 4 GB (driver 616.64), 8 GB RAM. Python 3.14 is global; the project pins 3.12 through uv (0.9.21). ffmpeg 8.0.1 runs from the Downloads folder (on PATH). Blender 4.5 LTS: `C:\Program Files\Blender Foundation\Blender 4.5\blender.exe` (4.5.10, not on PATH; `REWIND_BLENDER_PATH`). Docker Desktop is installed.
+
+## Next
+
+1. The owner merges PR #3 (T3), then this docs PR. T4 continued then builds its rule and analysis tools.
+2. T1 and T4 open their PRs. The owner reviews and merges them, and the coordinator records D-16 and any new decisions.
+3. Then T5 Evidence (boxes on clips, QR order links, insights) and T7 Evaluation (scores against T1's ground truth), two at a time. T6 Web after that, mockup first.
+4. T8 Submission last: README, demo video and the written answers.
 
 ## Open questions
 
 - Product name (the repo is `Rewind`; the name can still change).
-- Does the submission need a hosted URL, or are a demo video and the repo enough? Decides whether T8 needs a host (D-12).
-- The demo's spoken language for any voice output (dropped from P0; only relevant if added back).
+- Judges look at the "live product". Is a working Telegram bot plus a tunnel to the owner's machine during judging enough, or does T8 need an always-on host (D-12)?
+- T3's open questions (PR #3): `end_of_footage` for items that left earlier, the "4 flaps before tape" approximation, whether `exits_view` needs a frame edge, fixed or sliding rate windows. T1 raised the first one too.
