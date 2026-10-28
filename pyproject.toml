@@ -88,3 +88,4 @@ imports = "lint-imports"
 test = "pytest"
 check = ["lint", "format-check", "typecheck", "imports", "test"]
 serve = "uvicorn rewind.app.main:create_app --factory --host 127.0.0.1 --port 8000"
+live = "python scripts/serve_live.py"
