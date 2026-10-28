@@ -25,10 +25,12 @@ from rewind.core.ports import Segmenter
 @dataclass(frozen=True, slots=True)
 class Perception:
     blobs: LocalDiskBlobStore
+    video_tools: FfmpegVideoTools
     proxies: ProxyMaker
     ingest: Ingest
     planner: Planner
     runner: PerceptionRunner
+    observations: ParquetObservationStore
     ledger: Ledger
     video_segmenter: MetaVideoSegmenter
     image_segmenter: MetaImageSegmenter
@@ -59,12 +61,15 @@ def build_perception(
         workspace_daily_usd=settings.workspace_daily_cap_usd,
         kill_switch_usd=settings.kill_switch_usd,
     )
+    observations = ParquetObservationStore(blobs)
     return Perception(
         blobs=blobs,
+        video_tools=video_tools,
         proxies=proxies,
         ingest=Ingest(blobs, video_tools, OpenCvActivityProbe(), proxies, settings.track_fps),
         planner=Planner(STRATEGIES),
-        runner=PerceptionRunner(proxies, ParquetObservationStore(blobs)),
+        runner=PerceptionRunner(proxies, observations),
+        observations=observations,
         ledger=Ledger(costs, limits),
         video_segmenter=MetaVideoSegmenter(api, blobs, settings.meta_file_ttl_s),
         image_segmenter=MetaImageSegmenter(api, blobs),
