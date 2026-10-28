@@ -75,6 +75,14 @@ Everything runs on the owner's machine: the FastAPI app under uvicorn, blobs on 
 Why: the Modal credit has not arrived and waiting costs build days. SAM 3.1 and Muse Spark are hosted APIs, so no GPU is needed; ffmpeg, OpenCV and Blender already run locally.
 Limits: the machine must stay on during live demos; the quick-tunnel URL changes on each restart, so the WhatsApp webhook is re-registered at start-up; 8 GB RAM means one heavy job (render or analysis) at a time. If the submission needs a hosted URL, T8 picks Modal (if credit arrives) or a Docker host.
 
+### D-13 Contract conventions (T0) — proposed (2026-10-28)
+
+- Boxes, points and zones are normalized to the frame (0..1), so they survive a proxy at another resolution. A mask is an RLE of the crop under its box, which is how SAM 3.1 returns it.
+- `Observation.object_id` is the segmenter's own id, stable only while the object stays in view. Item identity is our `Track`, built by association (S0: SAM reuses ids for different cartons).
+- `Segmenter` takes one concept and one media blob plus its time map (the footage time of each frame). It bills every frame it is sent, so the caller sends a proxy at the planned fps. Adapters return `Charge`s read from the provider's reported usage, and estimate from price, so the ledger matches the bill (D-7).
+- Contracts forbid unknown fields, so language model JSON with an invented key fails validation and is retried. Collections are tuples.
+Why: these choices are shared by T1–T5; changing one later means a contract PR that blocks those tracks.
+
 ## Done
 
 (nothing yet)
