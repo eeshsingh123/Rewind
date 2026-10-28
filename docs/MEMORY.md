@@ -36,7 +36,7 @@ Needed later:
 
 ## Machine
 
-- Windows 11, GTX 1650 4 GB (driver 616.64), 8 GB RAM. Python 3.14 is global; the project pins 3.12 through uv (0.9.21). ffmpeg 8.0.1 runs from the Downloads folder (on PATH). Blender 4.5 LTS: `C:Program FilesBlender FoundationBlender 4.5blender.exe` (4.5.10, not on PATH; T1 reads it from a setting). Docker Desktop is installed.
+- Windows 11, GTX 1650 4 GB (driver 616.64), 8 GB RAM. Python 3.14 is global; the project pins 3.12 through uv (0.9.21). ffmpeg 8.0.1 runs from the Downloads folder (on PATH). Blender 4.5 LTS: `C:\Program Files\Blender Foundation\Blender 4.5lender.exe` (4.5.10, not on PATH; T1 reads it from a setting). Docker Desktop is installed.
 
 ## Open questions
 
