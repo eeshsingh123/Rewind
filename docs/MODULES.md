@@ -73,6 +73,7 @@ Output: the answers in DECISIONS.md (D-6 figures confirmed or revised), and the 
 - `sim/render.py` turns a scenario YAML + seed into `video.mp4`, `ground_truth.json` and `zones.json`.
 - Builders: conveyor (scrolling belt), jar + cap + label, carton with 4 hinged flaps + tape + QR label per order, stations with fault rates, jam events.
 - Selective SimReady fetch, CC0 materials and HDRIs, randomization (lights, camera, speed, faults, colours), CCTV degradation.
+- Realistic textures and props, not flat shapes: in S0, SAM concept prompts were weak on flat synthetic shapes, so a plain sim would measure the sim instead of the pipeline.
 - Scenarios: S1 jar line and S2 carton packing (P0); S3 outbound dock (P2).
 - Out: physics, humans, Isaac Sim.
 - Acceptance: two seeds of S1 and S2 render at 720p, and their ground truth matches a manual check of 10 items.

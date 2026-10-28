@@ -29,20 +29,21 @@ Why: the ML and video tooling is Python-first; Postgres is safe with parallel wo
 Blobs (footage, proxies, keyframes, clips, Parquet) live on local disk behind the `BlobStore` port, under one data root from settings. Media is served by our own signed, expiring URLs. A Modal Volume or Cloudflare R2 is a later adapter.
 Why: no extra account or payment card before Nov 4, and swapping storage changes one adapter.
 
-### D-6 Cost strategy — accepted, figures pending the S0 spike (2026-10-28)
+### D-6 Cost strategy — accepted, figures confirmed by S0 (2026-10-28)
 
-Prices: SAM 3.1 video $0.20 per 1k frames, image $2.50 per 1k images. Use video wherever possible. Each step is kept only if the eval sweep (D-10) shows it doesn't cost accuracy. In build order:
-1. Re-encode at upload to a 720p proxy at the planned fps, keeping a map back to the original time.
+Prices (S0): SAM 3.1 video $0.20 per 1k frames, image $2.50 per 1k images. SAM takes one concept per request and bills every frame of the file sent (or of the tracked range for box prompts), with a 50-frame minimum per request, found or not. It has no fps setting: the proxy's fps is the cost knob. The ledger reads `usage.video_frames_processed` / `images_processed`. Muse Spark 1.3 costs $1.25 in, $0.15 cached and $4.25 out per 1M tokens; Contributor costs $0.10, $0.002 and $0.20 (D-14). Reasoning tokens bill as output and dominate small calls.
+Use video wherever possible. Each step is kept only if the eval sweep (D-10) shows it doesn't cost accuracy. In build order:
+1. Re-encode at upload to a 720p proxy at the planned fps, keeping a map back to the original time. Mandatory: the file's frame count is the bill.
 2. Skip idle footage on the CPU (MOG2 inside the zones); upload only the active spans, joined together.
 3. Rule-aware sampling planner: the compiled rules decide the concepts, regions, fps and windows.
 4. Concept scoping: track only the entity continuously; look for parts only near checkpoints.
-5. `checkpoint` strategy for flow lines: tripwire crossings found on the CPU, item identity from conveyor order plus timing, falling back to `dense_track` for a window when the order is ambiguous.
+5. `checkpoint` strategy for flow lines: tripwire crossings found on the CPU, item identity from our own association (SAM object ids are reused across items), falling back to `dense_track` for a window when the order is ambiguous. Checkpoint windows are joined into one clip per concept, or box-prompted up to 16 objects at a time and tracked `forward`; never one request per item (the 50-frame floor makes that about 10× dearer).
 6. Coarse-to-fine: sample more densely only around borderline decisions.
-7. Muse Spark yes/no on a crop only when a decision is borderline, within a budget per job.
-8. Cache by `(content_hash, frame_idx, concept, model_version)`. A retroactive rule with a new concept runs on stored keyframes only.
+7. Muse Spark yes/no on a crop only when a decision is borderline, at `minimal` effort, within a budget per job.
+8. Cache by `(content_hash, frame_idx, concept, model_version)`. SAM results vary slightly between runs, so the cache is the source of truth for replays. A retroactive rule with a new concept runs on stored keyframes only.
 9. Crop-and-pack and self-hosted SAM: experiments only, after the hackathon unless the sweep makes a strong case.
 
-Rough estimate for one camera, an 8-hour shift, about 4,000 items and 3 concepts: about $1,080 a day with naive image calls, about $86 a day with naive video calls at 5 fps, and about $2–10 a day with every step above. This depends on S0's billing answers: is billing per frame per prompt, and on frames uploaded or frames processed?
+Estimate for one camera, an 8-hour shift, about 4,000 items and 3 concepts: about $1,080 a day with naive image calls, about $86 a day with naive video calls at 5 fps, and about $5–12 a day with every step above (entity at 2 fps on active spans about $6, parts in joined checkpoint windows about $6). Sending one request per item instead would cost about $80 a day. Muse yes/no checks on Contributor cost about $0.07 for 500.
 
 ### D-7 Budget guardrails — accepted (2026-10-28)
 
@@ -79,9 +80,14 @@ Limits: the machine must stay on during live demos; the quick-tunnel URL changes
 
 - Boxes, points and zones are normalized to the frame (0..1), so they survive a proxy at another resolution. A mask is an RLE of the crop under its box, which is how SAM 3.1 returns it.
 - `Observation.object_id` is the segmenter's own id, stable only while the object stays in view. Item identity is our `Track`, built by association (S0: SAM reuses ids for different cartons).
-- `Segmenter` takes one concept and one media blob plus its time map (the footage time of each frame). It bills every frame it is sent, so the caller sends a proxy at the planned fps. Adapters return `Charge`s read from the provider's reported usage, and estimate from price, so the ledger matches the bill (D-7).
+- `Segmenter` takes one prompt (one concept, or up to 16 marked objects) and one media blob plus its time map (the footage time of each frame). It bills every frame it is sent, so the caller sends a proxy at the planned fps. Adapters return `Charge`s read from the provider's reported usage, and estimate from price, so the ledger matches the bill (D-7).
 - Contracts forbid unknown fields, so language model JSON with an invented key fails validation and is retried. Collections are tuples.
 Why: these choices are shared by T1–T5; changing one later means a contract PR that blocks those tracks.
+
+### D-14 Muse model: `muse-spark-1.3-contributor` by default — accepted (2026-10-28)
+
+The language model id is the setting `REWIND_MUSE_MODEL`, which defaults to `muse-spark-1.3-contributor`. `muse-spark-1.3` is the drop-in alternative for footage that must not be used for training; switching is a change to the setting only.
+Why: it has every feature we need (S0) and costs about 12–20× less. Limits: Meta may train on everything sent to it (fine for sim and stock footage), and it allows 150 requests per minute per team, so bursts of yes/no checks queue and back off on 429.
 
 ## Done
 

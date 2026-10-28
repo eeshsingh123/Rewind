@@ -4,10 +4,11 @@ Last updated: 2026-10-28
 
 ## State
 
-- Discussion done: product (D-1), architecture (D-2, D-3), stack (D-4), cost strategy (D-6), channels (D-8), sim bench (D-9), parallel tracks and session effort (D-11), local-first runtime without Modal (D-12).
-- T0 Foundations is built on `t0-foundations`, with its PR open and waiting for the owner to merge. It has Contracts v1, the seven core ports, settings, `/health`, and `uv run poe check` (ruff, pyright, import-linter, pytest) running locally and in CI. Contract conventions are in D-13 (proposed).
-- `main` is protected: a PR is required (admins too) and force-push is blocked. The `check` status is required after its first CI run.
-- Next: after T0 merges, one contract PR with (a) `Line`, `Footage` and `Rule` records for the `Repository` (Contracts v1 does not list them), and (b) what S0 still adds to the ports: box prompts for `Segmenter`, and tools and image input for `LanguageModel`. Then T1–T4 in parallel.
+- Discussion done: product (D-1), architecture (D-2, D-3), stack (D-4), cost strategy (D-6), channels (D-8), sim bench (D-9), parallel tracks and session effort (D-11), local-first runtime without Modal (D-12), Muse model (D-14).
+- S0 is done for the Meta models: SAM 3.1 and Muse Spark are both enabled, and D-6 now has the confirmed figures. Findings and recordings are in the uncommitted `spikes/s0/`; T2 copies the recordings it needs into `tests/recordings/`. The WhatsApp and Telegram checks are still open.
+- T0 Foundations is built on `t0-foundations`, with its PR open and waiting for the owner to merge. It has Contracts v1, the seven core ports (`Segmenter` and `LanguageModel` already shaped by S0: object prompts, the 50-frame floor, tools, images and effort), settings, `/health`, and `uv run poe check` (ruff, pyright, import-linter, pytest) running locally and in CI. Contract conventions are in D-13 (proposed).
+- `main` is protected: a PR is required (admins too) and force-push is blocked. The `check` status is required.
+- Next: after T0 merges, T1–T4 in parallel. Open: `Line`, `Footage` and `Rule` records for the `Repository` are not in Contracts v1, so the first track that stores them needs a contract PR first.
 
 ## Blockers the owner sets up
 
@@ -15,9 +16,9 @@ Needed for T0:
 - [x] Empty GitHub repo `Rewind`. `gh` is signed in as eeshsingh123.
 - [ ] `cloudflared` installed (`winget install Cloudflare.cloudflared`). The tunnel check of `/health` is still pending: run `uv run poe serve`, then `cloudflared tunnel --url http://localhost:8000`, and open `<tunnel-url>/health`.
 
-Needed for S0 (blocks T2, T3 compiler, T4):
-- [x] Meta Model API key, in the user environment as `META_API_KEY`. Read it only through settings; never print it. Whether SAM 3.1 and Muse Spark are both enabled on it is checked in S0.
-- [ ] The SAM 3.1 and Muse Spark API reference pages saved into `docs/vendor/` if dev.meta.ai needs a login to read them (endpoints, request/response shapes, pricing, limits).
+Needed for S0 (the Meta half is done; the channel half blocks T4):
+- [x] Meta Model API key, in the user environment as `META_API_KEY`. Read it only through settings; never print it. SAM 3.1 and Muse Spark are both enabled on it.
+- [x] API reference: public, no login, at `https://dev.meta.ai/docs/*.md` (index `https://dev.meta.ai/llms.txt`).
 - [ ] WhatsApp: Meta developer app with WhatsApp added, test number id, a **system user token** (the temporary token expires in 24 h), the owner's phone added as a test recipient.
 - [ ] Telegram: bot token from @BotFather.
 - [ ] Neon Postgres project and connection string.
