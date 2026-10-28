@@ -26,7 +26,6 @@ def main() -> None:
     spec_path, output, preview = sys.argv[sys.argv.index("--") + 1 :]
     spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.context.preferences.edit.keyframe_new_interpolation_type = "LINEAR"
     scene = Scene(spec)
     _render_settings(spec, output, preview == "1")
     _world(scene)
@@ -36,10 +35,20 @@ def main() -> None:
     _belt(scene)
     _background(scene)
     BUILDERS[spec["builder"]](scene)
+    _linear_keys()
     if preview == "1":
         bpy.ops.render.render(write_still=True)
     else:
         bpy.ops.render.render(animation=True)
+
+
+def _linear_keys() -> None:
+    # The plan moves everything linearly between keys; Blender's default Bezier easing would
+    # put items up to 0.7 m away from where the ground truth says they are mid-clip.
+    for action in bpy.data.actions:
+        for curve in action.fcurves:
+            for key in curve.keyframe_points:
+                key.interpolation = "LINEAR"
 
 
 def _render_settings(spec, output: str, preview: bool) -> None:
