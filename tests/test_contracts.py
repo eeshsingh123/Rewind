@@ -7,9 +7,12 @@ from rewind.contracts import (
     Box,
     CanonicalMessage,
     CostEntry,
+    Footage,
     GroundTruth,
+    Line,
     Observation,
     RleMask,
+    Rule,
     RuleSpec,
     TimeSpan,
 )
@@ -104,6 +107,47 @@ SAMPLES: list[tuple[type[BaseModel], dict[str, Any]]] = [
             "attachments": [{"kind": "video", "ref": "file-abc", "mime_type": "video/mp4"}],
         },
     ),
+    (
+        Line,
+        {
+            "id": "l1",
+            "workspace_id": "w1",
+            "name": "Packing line 2",
+            "zones": [{"key": "exit", "source": "implicit", "shape": {"kind": "view_exit"}}],
+            "created_at": "2026-10-28T14:00:00Z",
+        },
+    ),
+    (
+        Footage,
+        {
+            "id": "f1",
+            "line_id": "l1",
+            "content_hash": "sha256:ab12",
+            "original_key": "footage/f1/original.mp4",
+            "duration_s": 600,
+            "fps": 25,
+            "width": 1920,
+            "height": 1080,
+            "proxy": {
+                "blob_key": "footage/f1/proxy.mp4",
+                "fps": 5,
+                "time_map_key": "footage/f1/time_map.json",
+            },
+            "status": "ready",
+        },
+    ),
+    (
+        Rule,
+        {
+            "id": "r1",
+            "line_id": "l1",
+            "text": "Every carton needs a label when it enters sealing.",
+            "normalized_text": "every carton needs a label when it enters sealing",
+            "spec": CARTON_RULE,
+            "active": True,
+            "created_at": "2026-10-28T14:00:00Z",
+        },
+    ),
 ]
 
 
@@ -145,6 +189,8 @@ REJECTED: list[tuple[str, type[BaseModel], dict[str, Any]]] = [
     ),
     ("negative cost", CostEntry, dict(SAMPLES[3][1], usd="-0.01")),
     ("empty message", CanonicalMessage, dict(SAMPLES[4][1], attachments=[])),
+    ("unknown footage status", Footage, dict(SAMPLES[6][1], status="done")),
+    ("rule with an invalid spec", Rule, dict(SAMPLES[7][1], spec=_rule(parts={}))),
 ]
 
 

@@ -11,6 +11,7 @@ from rewind.contracts.messaging import (
     ReplyMedia,
 )
 from rewind.contracts.perception import Observation, SamplingPlan, SamplingWindow, Track
+from rewind.contracts.records import Footage, Line, Proxy, Rule
 from rewind.contracts.rules import (
     Before,
     Checkpoint,
@@ -57,6 +58,7 @@ __all__ = [
     "Event",
     "EventKind",
     "ExitsView",
+    "Footage",
     "GroundTruth",
     "GroundTruthItem",
     "Has",
@@ -64,15 +66,18 @@ __all__ = [
     "InZone",
     "Insight",
     "Key",
+    "Line",
     "Observation",
     "Point",
     "Polygon",
     "Predicate",
+    "Proxy",
     "Rate",
     "Reply",
     "ReplyMedia",
     "Requirement",
     "RleMask",
+    "Rule",
     "RuleSpec",
     "SamplingPlan",
     "SamplingWindow",
