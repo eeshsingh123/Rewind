@@ -1,9 +1,11 @@
+import math
 from bisect import bisect_left
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from statistics import median
 
 from rewind.contracts import Observation, RuleSpec, TimeSpan, Track, Zone
-from rewind.core.rules.zones import overlap
+from rewind.core.rules.zones import center, overlap
 
 # Parts may be sampled at other frames than the entity, so a part is matched to the nearest
 # entity box within this gap.
@@ -43,7 +45,7 @@ def build_items(
     zones: Mapping[str, Zone],
 ) -> tuple[Item, ...]:
     entity_tracks = sorted(
-        (track for track in tracks if track.concept == spec.entity.phrase),
+        (track for track in tracks if track.concept == spec.entity.phrase and moves(track)),
         key=lambda track: track.track_id,
     )
     paths = [tuple(sorted(track.observations, key=lambda o: o.t)) for track in entity_tracks]
@@ -63,6 +65,17 @@ def build_items(
         )
         for track, path, parts in zip(entity_tracks, paths, attributed, strict=True)
     )
+
+
+# An item on a line travels; something that never leaves its own footprint is background (a
+# parcel on a shelf, a bin by the belt). Measured against the object's own size, not the frame,
+# so it holds for any zoom and any line speed.
+def moves(track: Track) -> bool:
+    boxes = [o.box for o in track.observations]
+    size = median(math.hypot(b.x1 - b.x0, b.y1 - b.y0) for b in boxes)
+    start = center(boxes[0])
+    reach = max(math.hypot(c.x - start.x, c.y - start.y) for c in map(center, boxes))
+    return reach >= size / 2
 
 
 def _order(observation: Observation) -> tuple[float, float, float]:

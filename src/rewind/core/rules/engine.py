@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from rewind.contracts import (
+    Box,
     Checkpoint,
     Dwell,
     EndOfFootage,
@@ -25,12 +26,14 @@ from rewind.core.rules.items import Item, build_items
 from rewind.core.rules.predicates import PREDICATES, Evaluator
 from rewind.core.rules.zones import VIEW_EXIT, RuleError, area, center, contains, crossing
 
-# `at_checkpoint` looks back this far from the checkpoint; perception samples parts in this window.
+# `at_checkpoint` looks back this far from when the item is checked; perception samples parts here.
 CHECKPOINT_WINDOW_S = 1.0
 # A track that lasts until this close to the end of the footage has not left the view.
 EXIT_MARGIN_S = 1.0
-CLIP_BEFORE_S = 4.0
-CLIP_AFTER_S = 2.0
+# A box within this share of the frame from a border is cut by it: the item is leaving or entering.
+EDGE_MARGIN = 0.02
+CLIP_BEFORE_S = 3.0
+CLIP_AFTER_S = 1.0
 RATE_WINDOW_S = 60.0
 
 
@@ -44,6 +47,23 @@ class Scene:
     zones: tuple[Zone, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class Check:
+    track_id: str
+    # When the item reaches the rule's checkpoint.
+    t: float
+    # When its parts are best seen for an `at_checkpoint` requirement. For an exit this is the last
+    # moment the item was whole in the frame: after it, a part may be cut off by the border.
+    look_at: float
+
+
+def checks(spec: RuleSpec, scene: Scene) -> tuple[Check, ...]:
+    """The items the rule judges at its checkpoint; parts are not needed to find them."""
+    items = build_items(spec, scene.tracks, (), _zones(spec, scene))
+    found = (_check(spec.checkpoint, item, scene.duration_s) for item in items)
+    return tuple(check for check in found if check is not None)
+
+
 def evaluate(
     rule_id: str,
     spec: RuleSpec,
@@ -55,14 +75,14 @@ def evaluate(
     found: list[Violation] = []
     passed: list[float] = []
     for item in items:
-        t = checkpoint_time(spec.checkpoint, item, scene.duration_s)
-        if t is not None:
-            passed.append(t)
-            failures = _requirement_failures(spec, item, t, predicates) + _order_failures(
-                spec, item, t
+        check = _check(spec.checkpoint, item, scene.duration_s)
+        if check is not None:
+            passed.append(check.t)
+            failures = _requirement_failures(spec, item, check, predicates) + _order_failures(
+                spec, item, check.t
             )
             if failures:
-                found.append(_item_violation(rule_id, scene, item, t, "; ".join(failures)))
+                found.append(_item_violation(rule_id, scene, item, check, "; ".join(failures)))
         if spec.dwell is not None:
             found.extend(_dwell_violations(rule_id, scene, spec.dwell, item))
     if spec.rate is not None:
@@ -79,15 +99,22 @@ def zone_keys(spec: RuleSpec) -> frozenset[str]:
     return frozenset(keys)
 
 
-def checkpoint_time(checkpoint: Checkpoint, item: Item, duration_s: float) -> float | None:
+def _check(checkpoint: Checkpoint, item: Item, duration_s: float) -> Check | None:
     match checkpoint:
         case ExitsView():
-            return _exit_time(item, duration_s)
+            return _exit_check(item, duration_s)
         case EndOfFootage():
             # The item's last known state stands for its state at the end of the footage.
-            return item.end
+            return _at(item, item.end)
         case EntersZone(zone=key):
-            return _entry_time(item, item.zones[key], duration_s)
+            zone = item.zones[key]
+            if isinstance(zone.shape, ViewExit):
+                return _exit_check(item, duration_s)
+            return _at(item, _entry_time(item, zone))
+
+
+def _at(item: Item, t: float | None) -> Check | None:
+    return None if t is None else Check(item.track.track_id, t, t)
 
 
 def _zones(spec: RuleSpec, scene: Scene) -> dict[str, Zone]:
@@ -98,16 +125,31 @@ def _zones(spec: RuleSpec, scene: Scene) -> dict[str, Zone]:
     return zones
 
 
-def _exit_time(item: Item, duration_s: float) -> float | None:
-    if item.end >= duration_s - EXIT_MARGIN_S:
+# An item leaves the view when its track ends at a border of the frame. A track that ends inside
+# the frame was lost (occluded, or missed by the segmenter), and an item never seen whole cannot be
+# checked; neither is judged, so a finding never rests on a moment the camera did not show.
+def _exit_check(item: Item, duration_s: float) -> Check | None:
+    if item.end >= duration_s - EXIT_MARGIN_S or not _at_border(item.path[-1].box):
         return None
-    return item.end
+    whole = [o.t for o in item.path if not _at_border(o.box)]
+    if not whole:
+        return None
+    return Check(item.track.track_id, item.end, whole[-1])
 
 
-def _entry_time(item: Item, zone: Zone, duration_s: float) -> float | None:
+def _at_border(box: Box) -> bool:
+    return (
+        box.x0 <= EDGE_MARGIN
+        or box.y0 <= EDGE_MARGIN
+        or box.x1 >= 1 - EDGE_MARGIN
+        or box.y1 >= 1 - EDGE_MARGIN
+    )
+
+
+def _entry_time(item: Item, zone: Zone) -> float | None:
     match zone.shape:
         case ViewExit():
-            return _exit_time(item, duration_s)
+            return None
         case Polygon() as polygon:
             return next((o.t for o in item.path if contains(polygon, center(o.box))), None)
         case Tripwire() as tripwire:
@@ -123,23 +165,25 @@ def _crossing_time(item: Item, tripwire: Tripwire) -> float | None:
 
 
 def _requirement_failures(
-    spec: RuleSpec, item: Item, t: float, predicates: Mapping[str, Evaluator]
+    spec: RuleSpec, item: Item, check: Check, predicates: Mapping[str, Evaluator]
 ) -> list[str]:
     failures: list[str] = []
     for requirement in spec.requirements:
         evaluator = predicates.get(requirement.predicate.kind)
         if evaluator is None:
             raise RuleError(f"no evaluator for predicate {requirement.predicate.kind}")
-        failure = evaluator(requirement.predicate, item, _requirement_span(requirement, item, t))
+        span = _requirement_span(requirement, item, check)
+        failure = evaluator(requirement.predicate, item, span)
         if failure is not None:
             failures.append(f"{failure} {_moment(spec.checkpoint, requirement)}")
     return failures
 
 
-def _requirement_span(requirement: Requirement, item: Item, t: float) -> TimeSpan:
+def _requirement_span(requirement: Requirement, item: Item, check: Check) -> TimeSpan:
     if requirement.timing == "ever_before":
-        return TimeSpan(start=item.start, end=t)
-    return TimeSpan(start=max(item.start, t - CHECKPOINT_WINDOW_S), end=t)
+        return TimeSpan(start=item.start, end=check.t)
+    # Up to the checkpoint itself: a part still seen as the item crosses the border counts.
+    return TimeSpan(start=max(item.start, check.look_at - CHECKPOINT_WINDOW_S), end=check.t)
 
 
 def _moment(checkpoint: Checkpoint, requirement: Requirement) -> str:
@@ -245,16 +289,19 @@ def _rate_windows(duration_s: float) -> list[TimeSpan]:
     return [TimeSpan(start=m * RATE_WINDOW_S, end=(m + 1) * RATE_WINDOW_S) for m in range(minutes)]
 
 
-def _item_violation(rule_id: str, scene: Scene, item: Item, t: float, reason: str) -> Violation:
+def _item_violation(rule_id: str, scene: Scene, item: Item, check: Check, reason: str) -> Violation:
+    # The clip shows the item on its way to the checkpoint, including the moment it was checked.
+    start = min(check.t - CLIP_BEFORE_S, check.look_at - CHECKPOINT_WINDOW_S)
     return Violation(
         id=_violation_id(rule_id, scene.footage_id, item.track.track_id, "checkpoint"),
         rule_id=rule_id,
         footage_id=scene.footage_id,
         track_id=item.track.track_id,
-        t=t,
+        t=check.t,
         reason=reason,
         clip=TimeSpan(
-            start=max(0.0, t - CLIP_BEFORE_S), end=max(t, min(scene.duration_s, t + CLIP_AFTER_S))
+            start=max(0.0, start),
+            end=max(check.t, min(scene.duration_s, check.t + CLIP_AFTER_S)),
         ),
     )
 
