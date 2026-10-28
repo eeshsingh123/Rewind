@@ -2,17 +2,35 @@ from rewind.core.ports.blob_store import BlobStore, BlobStoreError
 from rewind.core.ports.channel import Channel, ChannelError
 from rewind.core.ports.job_runner import JobHandler, JobPayload, JobRunner, JobRunnerError
 from rewind.core.ports.language_model import (
+    AssistantMessage,
     ChatMessage,
     Completion,
     CompletionRequest,
+    Effort,
     LanguageModel,
     LanguageModelError,
+    SystemMessage,
+    Tool,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
 )
 from rewind.core.ports.repository import Repository, RepositoryError
-from rewind.core.ports.segmenter import Segmentation, Segmenter, SegmenterError, SegmentRequest
+from rewind.core.ports.segmenter import (
+    ConceptPrompt,
+    ObjectPrompt,
+    ObjectPrompts,
+    Prompt,
+    PromptPoint,
+    Segmentation,
+    Segmenter,
+    SegmenterError,
+    SegmentRequest,
+)
 from rewind.core.ports.video_tools import VideoInfo, VideoTools, VideoToolsError
 
 __all__ = [
+    "AssistantMessage",
     "BlobStore",
     "BlobStoreError",
     "Channel",
@@ -20,18 +38,29 @@ __all__ = [
     "ChatMessage",
     "Completion",
     "CompletionRequest",
+    "ConceptPrompt",
+    "Effort",
     "JobHandler",
     "JobPayload",
     "JobRunner",
     "JobRunnerError",
     "LanguageModel",
     "LanguageModelError",
+    "ObjectPrompt",
+    "ObjectPrompts",
+    "Prompt",
+    "PromptPoint",
     "Repository",
     "RepositoryError",
     "SegmentRequest",
     "Segmentation",
     "Segmenter",
     "SegmenterError",
+    "SystemMessage",
+    "Tool",
+    "ToolCall",
+    "ToolResultMessage",
+    "UserMessage",
     "VideoInfo",
     "VideoTools",
     "VideoToolsError",
