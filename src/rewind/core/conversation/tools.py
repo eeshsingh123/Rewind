@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from rewind.contracts import Button, ReplyMedia
 from rewind.core.conversation.store import ChatRef
-from rewind.core.ports import Tool
+from rewind.core.ports import JobPayload, Tool
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,11 +18,19 @@ class TurnContext:
 
 
 @dataclass(frozen=True, slots=True)
+class Job:
+    kind: str
+    payload: JobPayload
+
+
+@dataclass(frozen=True, slots=True)
 class ToolResult:
     # What the model reads back; facts only, the agent words the reply.
     text: str
     buttons: tuple[Button, ...] = ()
     media: tuple[ReplyMedia, ...] = ()
+    # Started only once the turn's reply is sent, so "started" never arrives after the results.
+    jobs: tuple[Job, ...] = ()
 
 
 class ToolArguments(BaseModel):

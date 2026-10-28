@@ -14,12 +14,15 @@ from rewind.core.conversation import (
     INSTRUCTIONS,
     TURN_JOB,
     Agent,
+    AgentReply,
     AttachmentTooLargeError,
     ChatRef,
     Conversation,
     ConversationSettings,
     Inbox,
+    Job,
     Toolbox,
+    TurnContext,
     TurnLimits,
     create_line,
     list_rules,
@@ -259,3 +262,26 @@ async def test_senders_off_the_allowlist_get_no_model_call(setup: Setup, tmp_pat
 
     assert setup.channel.sent[-1].text == "Sorry, this assistant is private."
     assert setup.model.requests == []
+
+
+async def test_a_job_a_turn_starts_runs_only_after_the_turn_has_replied(setup: Setup) -> None:
+    async def start(context: TurnContext, argument: str) -> AgentReply:
+        return AgentReply("Started.", jobs=(Job("work", {}),))
+
+    async def work(payload: JobPayload) -> None:
+        await setup.channel.show_progress("42", "job", "Checking…")
+
+    setup.jobs.register("work", work)
+    conversation = Conversation(
+        repository=setup.repository, store=setup.repository, blobs=MemoryBlobs(),
+        jobs=setup.jobs, channels={"telegram": setup.channel},
+        agent=Agent(INSTRUCTIONS, Toolbox.of([]), TurnLimits()),
+        model_for=lambda workspace_id: setup.model,
+        settings=ConversationSettings(frozenset(), "https://tunnel.test"), clock=lambda: NOW,
+        commands={"/go": start},
+    )  # fmt: skip
+
+    await conversation.handle(_message("/go"))
+    await setup.jobs.drain()
+
+    assert [reply.text for reply in setup.channel.sent] == ["Started.", "Checking…"]

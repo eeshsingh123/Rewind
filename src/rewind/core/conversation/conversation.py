@@ -112,6 +112,8 @@ class Conversation:
         except BudgetExceededError as error:
             reply = AgentReply(f"I've stopped making paid calls: {error}.")
         await self.send(chat, reply)
+        for job in reply.jobs:
+            await self._jobs.submit(job.kind, job.payload)
 
     # The line name an upload link is for, without using the link up.
     async def upload_target(self, token: str) -> str | None:
@@ -136,6 +138,8 @@ class Conversation:
         return True
 
     async def send(self, chat: ChatRef, reply: AgentReply) -> None:
+        if not (reply.text or reply.media):
+            return
         channel = self._channels[chat.channel]
         await channel.send(
             Reply(

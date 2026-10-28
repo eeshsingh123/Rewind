@@ -21,6 +21,7 @@ from rewind.core.conversation.prompt import INSTRUCTIONS
 from rewind.core.conversation.store import ChatRef, ConversationStore, HistoryEntry
 from rewind.core.conversation.tools import (
     AgentTool,
+    Job,
     ToolArguments,
     Toolbox,
     ToolError,
@@ -57,6 +58,7 @@ __all__ = [
     "Findings",
     "HistoryEntry",
     "Inbox",
+    "Job",
     "LineArguments",
     "Outbox",
     "ToolArguments",
