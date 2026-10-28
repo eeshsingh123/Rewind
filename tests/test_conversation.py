@@ -64,6 +64,9 @@ class FakeChannel:
     async def send(self, reply: Reply) -> None:
         self.sent.append(reply)
 
+    async def show_progress(self, chat_id: str, key: str, text: str) -> None:
+        self.sent.append(Reply(channel=self.name, chat_id=chat_id, text=text))
+
     async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
         if (attachment.size_bytes or 0) > self.fetch_limit:
             raise AttachmentTooLargeError(self.fetch_limit)
@@ -224,8 +227,7 @@ async def test_a_video_is_stored_and_queued_for_ingest(setup: Setup) -> None:
     await setup.jobs.drain()
 
     assert (
-        setup.ingested[0]["original_key"]
-        == f"footage/{setup.ingested[0]['footage_id']}/original.mp4"
+        setup.ingested[0]["original_key"] == f"footage/{setup.ingested[0]['footage_id']}/belt.mp4"
     )
     assert "Packing line 2" in setup.channel.sent[-1].text
 

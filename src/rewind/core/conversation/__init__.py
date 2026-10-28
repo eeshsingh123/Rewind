@@ -1,4 +1,13 @@
 from rewind.core.conversation.agent import Agent, AgentReply, TurnLimits
+from rewind.core.conversation.analysis_tools import (
+    Analyze,
+    AnalyzeSettings,
+    Findings,
+    add_rule,
+    describe_rule,
+    rule_commands,
+)
+from rewind.core.conversation.channel import ChatChannel, Outbox
 from rewind.core.conversation.conversation import (
     INGEST_JOB,
     TURN_JOB,
@@ -36,15 +45,20 @@ __all__ = [
     "Agent",
     "AgentReply",
     "AgentTool",
+    "Analyze",
+    "AnalyzeSettings",
     "AttachmentTooLargeError",
+    "ChatChannel",
     "ChatRef",
     "Command",
     "Conversation",
     "ConversationSettings",
     "ConversationStore",
+    "Findings",
     "HistoryEntry",
     "Inbox",
     "LineArguments",
+    "Outbox",
     "ToolArguments",
     "ToolError",
     "ToolResult",
@@ -52,8 +66,11 @@ __all__ = [
     "Toolbox",
     "TurnContext",
     "TurnLimits",
+    "add_rule",
     "create_line",
+    "describe_rule",
     "list_rules",
     "resolve_line",
+    "rule_commands",
     "upload_link",
 ]

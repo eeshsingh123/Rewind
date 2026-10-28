@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 from rewind.contracts import Footage, Line, Rule
+from rewind.core.analysis import duration_text, footage_name
 
 INSTRUCTIONS = """\
 You are Rewind, a chat assistant that checks camera footage of production and packing lines.
@@ -18,6 +19,7 @@ must have, and when it is checked. If part of the rule cannot be checked, say wh
 - Before any check of footage, call analyze. It returns the estimated cost and either starts \
 the check or offers buttons to confirm. Never claim a check has started unless the tool says so.
 - For footage over the chat's size limit, or when someone asks, call upload_link.
+- For results, call violations; to show the proof of one, call get_clip with its number.
 - Results arrive in this chat on their own when a check finishes; you do not need to wait.
 
 How you write:
@@ -42,4 +44,8 @@ def workspace_state(
             f"- {line.name}: {len(line_rules)} rules, {len(footage.get(line.id, ()))} recordings"
         )
         parts += [f"  rule {index}: {rule.text}" for index, rule in enumerate(line_rules, 1)]
+        parts += [
+            f"  recording: {footage_name(f)} ({duration_text(f.duration_s)})"
+            for f in footage.get(line.id, ())
+        ]
     return "\n".join(parts)

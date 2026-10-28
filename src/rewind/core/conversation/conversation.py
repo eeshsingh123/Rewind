@@ -1,4 +1,5 @@
 import logging
+import re
 import secrets
 import tempfile
 import uuid
@@ -8,14 +9,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from rewind.contracts import Attachment, CanonicalMessage, Reply
+from rewind.core.analysis import INGEST_JOB
+from rewind.core.budget import BudgetExceededError
 from rewind.core.conversation.agent import Agent, AgentReply
+from rewind.core.conversation.channel import ChatChannel
 from rewind.core.conversation.prompt import workspace_state
 from rewind.core.conversation.store import ChatRef, ConversationStore, HistoryEntry
 from rewind.core.conversation.tools import ToolError, TurnContext
-from rewind.core.conversation.workspace_tools import make_upload_link, resolve_line
+from rewind.core.conversation.workspace_tools import UPLOAD_TOKEN, make_upload_link, resolve_line
 from rewind.core.ports import (
     BlobStore,
-    Channel,
     ChannelError,
     JobPayload,
     JobRunner,
@@ -27,10 +30,10 @@ from rewind.core.ports import (
 logger = logging.getLogger(__name__)
 
 TURN_JOB = "turn"
-INGEST_JOB = "ingest"
 LINK_TOKEN = "link"
 HISTORY_TURNS = 20
 NOT_ALLOWED = "Sorry, this assistant is private."
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 Command = Callable[[TurnContext, str], Awaitable[AgentReply]]
 
@@ -72,7 +75,7 @@ class Conversation:
         store: ConversationStore,
         blobs: BlobStore,
         jobs: JobRunner,
-        channels: Mapping[str, Channel],
+        channels: Mapping[str, ChatChannel],
         agent: Agent,
         model_for: Callable[[str], LanguageModel],
         settings: ConversationSettings,
@@ -106,7 +109,31 @@ class Conversation:
             reply = AgentReply(
                 "I couldn't reach the language model just now. Try again in a minute."
             )
+        except BudgetExceededError as error:
+            reply = AgentReply(f"I've stopped making paid calls: {error}.")
         await self.send(chat, reply)
+
+    # The line name an upload link is for, without using the link up.
+    async def upload_target(self, token: str) -> str | None:
+        payload = await self._store.peek_token(UPLOAD_TOKEN, token, self._clock())
+        if payload is None:
+            return None
+        line = await self._repository.get_line(str(payload["line_id"]))
+        return None if line is None else line.name
+
+    async def receive_upload(self, token: str, filename: str, source: Path) -> bool:
+        payload = await self._store.take_token(UPLOAD_TOKEN, token, self._clock())
+        if payload is None:
+            return False
+        footage_id = uuid.uuid4().hex
+        original_key = f"footage/{footage_id}/{_safe_name(filename, self._clock())}"
+        await self._blobs.write_file(original_key, source)
+        await self._jobs.submit(
+            INGEST_JOB, {**payload, "footage_id": footage_id, "original_key": original_key}
+        )
+        chat = ChatRef(str(payload["channel"]), str(payload["chat_id"]))
+        await self.send(chat, AgentReply(f"Upload finished: *{filename}*. I'm reading it now."))
+        return True
 
     async def send(self, chat: ChatRef, reply: AgentReply) -> None:
         channel = self._channels[chat.channel]
@@ -134,7 +161,10 @@ class Conversation:
 
     async def _turn(self, context: TurnContext, text: str) -> AgentReply:
         lines = await self._repository.lines(context.workspace_id)
-        rules = {line.id: await self._repository.rules(line.id) for line in lines}
+        rules = {
+            line.id: tuple(r for r in await self._repository.rules(line.id) if r.active)
+            for line in lines
+        }
         footage = {line.id: await self._repository.line_footage(line.id) for line in lines}
         state = workspace_state(sorted(lines, key=lambda line: line.created_at), rules, footage)
         history = await self._store.history(context.chat, HISTORY_TURNS)
@@ -157,11 +187,11 @@ class Conversation:
         except ToolError:
             return "Tell me the name of the line first, then send the footage again."
         footage_id = uuid.uuid4().hex
-        suffix = Path(attachment.filename or "footage.mp4").suffix or ".mp4"
-        original_key = f"footage/{footage_id}/original{suffix}"
+        name = _safe_name(attachment.filename, context.now)
+        original_key = f"footage/{footage_id}/{name}"
         try:
             with tempfile.TemporaryDirectory() as workdir:
-                local = Path(workdir) / f"original{suffix}"
+                local = Path(workdir) / name
                 await self._channels[channel_name].fetch_attachment(attachment, local)
                 await self._blobs.write_file(original_key, local)
         except AttachmentTooLargeError as error:
@@ -221,6 +251,14 @@ class Conversation:
         await self._store.bind_chat(context.chat, workspace_id)
         lines = await self._repository.lines(workspace_id)
         return AgentReply(f"Linked. This chat now shares a workspace with {len(lines)} lines.")
+
+
+# The file name is kept in the blob key: it is how people name a recording in chat.
+def _safe_name(filename: str | None, now: datetime) -> str:
+    name = _UNSAFE_NAME.sub("_", Path(filename or "").name).strip("._")
+    if not name:
+        return f"clip_{now:%m%d_%H%M%S}.mp4"
+    return name if Path(name).suffix else f"{name}.mp4"
 
 
 def _allowed(allowed: Collection[str], message: CanonicalMessage) -> bool:
