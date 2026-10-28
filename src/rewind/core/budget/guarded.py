@@ -52,13 +52,20 @@ class BudgetedSegmenter:
     async def segment(self, request: SegmentRequest) -> Segmentation:
         estimate = CostEstimate(charges=self._inner.estimate(request)).total_usd
         async with self._ledger.reserve(self._scope.workspace_id, estimate):
-            result = await self._inner.segment(request)
+            try:
+                result = await self._inner.segment(request)
+            except Exception:
+                await self._ledger.record_failure(
+                    self._scope.workspace_id, self._scope.job_id, self._inner.estimate(request)
+                )
+                raise
             await self._ledger.record(self._scope.workspace_id, self._scope.job_id, result.charges)
         return result
 
 
 @dataclass(frozen=True, slots=True)
 class TokenPrices:
+    provider: str
     input_usd_per_million: Decimal
     output_usd_per_million: Decimal
 
@@ -79,7 +86,20 @@ class BudgetedLanguageModel:
     async def complete(self, request: CompletionRequest) -> Completion:
         estimate = estimate_completion_usd(request, self._prices)
         async with self._ledger.reserve(self._scope.workspace_id, estimate):
-            completion = await self._inner.complete(request)
+            try:
+                completion = await self._inner.complete(request)
+            except Exception:
+                charge = Charge(
+                    provider=self._prices.provider,
+                    model=self._inner.model_version,
+                    unit="request",
+                    quantity=1,
+                    usd=estimate,
+                )
+                await self._ledger.record_failure(
+                    self._scope.workspace_id, self._scope.job_id, (charge,)
+                )
+                raise
             await self._ledger.record(
                 self._scope.workspace_id, self._scope.job_id, completion.charges
             )

@@ -11,6 +11,7 @@ from typing import Protocol
 from rewind.contracts import Charge, CostEntry
 
 EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
+UNCONFIRMED_SUFFIX = "_unconfirmed"
 
 
 # The part of the Repository port the ledger needs, so a small local store can stand in.
@@ -72,6 +73,17 @@ class Ledger:
                 job_id=job_id,
             )
             await self._records.add_cost(entry)
+
+    # A failed call may still have been billed, so its estimate is kept, marked unconfirmed, and
+    # counts toward the caps until someone reconciles it with the provider's bill.
+    async def record_failure(
+        self, workspace_id: str, job_id: str | None, estimate: Sequence[Charge]
+    ) -> None:
+        unconfirmed = [
+            charge.model_copy(update={"unit": f"{charge.unit}{UNCONFIRMED_SUFFIX}"})
+            for charge in estimate
+        ]
+        await self.record(workspace_id, job_id, unconfirmed)
 
     async def _check(self, workspace_id: str, estimate_usd: Decimal) -> None:
         now = self._clock()

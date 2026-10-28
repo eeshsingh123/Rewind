@@ -2,7 +2,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
+from rewind.app.settings import Settings
 from rewind.contracts import Charge, CostEntry
 from rewind.core.budget import (
     BudgetedLanguageModel,
@@ -18,6 +20,7 @@ from rewind.core.ports import (
     CompletionRequest,
     ConceptPrompt,
     Segmentation,
+    SegmenterError,
     SegmentRequest,
     UserMessage,
 )
@@ -148,7 +151,9 @@ class FakeLanguageModel:
 
 async def test_the_language_model_is_guarded_by_its_worst_case_estimate() -> None:
     prices = TokenPrices(
-        input_usd_per_million=Decimal("0.10"), output_usd_per_million=Decimal("0.20")
+        provider="meta",
+        input_usd_per_million=Decimal("0.10"),
+        output_usd_per_million=Decimal("0.20"),
     )
     costs = MemoryCosts()
     model = BudgetedLanguageModel(FakeLanguageModel(), _ledger(costs, daily="0.001"), prices, SCOPE)
@@ -161,3 +166,27 @@ async def test_the_language_model_is_guarded_by_its_worst_case_estimate() -> Non
     with pytest.raises(BudgetExceededError):
         await model.complete(huge)
     assert [e.unit for e in costs.entries] == ["output_token"]
+
+
+class FailingSegmenter(FakeSegmenter):
+    async def segment(self, request: SegmentRequest) -> Segmentation:
+        raise SegmenterError("the stream ended before response.completed")
+
+
+async def test_a_failed_call_is_recorded_as_unconfirmed_and_counts_toward_the_caps() -> None:
+    costs = MemoryCosts()
+    ledger = _ledger(costs, daily="0.015")
+
+    with pytest.raises(SegmenterError):
+        await BudgetedSegmenter(FailingSegmenter(), ledger, SCOPE).segment(REQUEST)
+
+    assert [(e.unit, e.quantity, e.usd) for e in costs.entries] == [
+        ("video_frame_unconfirmed", 50, Decimal("0.0100"))
+    ]
+    with pytest.raises(BudgetExceededError):
+        await BudgetedSegmenter(FakeSegmenter(), ledger, SCOPE).segment(REQUEST)
+
+
+def test_the_kill_switch_cannot_be_set_past_the_hard_limit() -> None:
+    with pytest.raises(ValidationError):
+        Settings(kill_switch_usd=Decimal("141"))

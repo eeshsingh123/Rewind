@@ -4,6 +4,8 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+HARD_LIMIT_USD = Decimal("140")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -25,4 +27,6 @@ class Settings(BaseSettings):
     track_fps: float = Field(default=2.0, gt=0)
     proxy_max_height: int = Field(default=720, gt=0)
     workspace_daily_cap_usd: Decimal = Field(default=Decimal("5"), ge=0)
-    kill_switch_usd: Decimal = Field(default=Decimal("120"), ge=0)
+    # All-time spend across workspaces. The account has $150 of credit, so the setting may be
+    # raised for a demo but never past HARD_LIMIT_USD, which keeps the card from being charged.
+    kill_switch_usd: Decimal = Field(default=Decimal("120"), ge=0, le=HARD_LIMIT_USD)
