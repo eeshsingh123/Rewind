@@ -49,6 +49,12 @@ class Repository(Protocol):
         """Upserts by id, so re-running a rule never duplicates its findings."""
         ...
 
+    async def replace_violations(
+        self, footage_id: str, rule_ids: Sequence[str], violations: Sequence[Violation]
+    ) -> None:
+        """Replaces what these rules found in this footage, so a rerun drops stale findings."""
+        ...
+
     async def violations(self, footage_id: str) -> tuple[Violation, ...]: ...
 
     async def save_events(self, events: Sequence[Event]) -> None:

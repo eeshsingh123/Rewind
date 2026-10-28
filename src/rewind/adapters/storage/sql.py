@@ -158,6 +158,18 @@ class SqlRepository:
     async def save_violations(self, violations: Sequence[Violation]) -> None:
         await self._upsert(violations_table, violations, footage_id=lambda r: r.footage_id)
 
+    async def replace_violations(
+        self, footage_id: str, rule_ids: Sequence[str], violations: Sequence[Violation]
+    ) -> None:
+        old = await self.violations(footage_id)
+        stale = [v.id for v in old if v.rule_id in rule_ids]
+        if stale:
+            async with self._begin() as connection:
+                await connection.execute(
+                    delete(violations_table).where(violations_table.c.id.in_(stale))
+                )
+        await self.save_violations(violations)
+
     async def violations(self, footage_id: str) -> tuple[Violation, ...]:
         found = await self._find(
             violations_table, Violation, violations_table.c.footage_id == footage_id
