@@ -1,0 +1,32 @@
+# S2: open cartons pass a flap folder, a shipping labeller, then the sealing taper, then leave the view.
+# Fault keys and the violation keys they lead to are in FAULTS.md.
+name: s2_carton_packing
+builder: carton_packing
+seed: 1
+duration_s: 60
+fps: 25
+width: 1280
+height: 720
+item_interval_s: 3.2
+camera:
+  position: [0.0, -2.6, 2.2]
+  look_at: [-0.05, 0.05, 0.78]
+  focal_mm: 28
+faults:
+  flap_up: 0.1
+  missing_label: 0.08
+  missing_qr: 0.06
+  missing_tape: 0.1
+jams: []
+params:
+  speed_m_s: 0.18
+  speed_jitter: 0.08
+  interval_jitter: 0.12
+  camera_jitter_m: 0.06
+  focal_jitter_mm: 1.0
+  jam_probability: 0.4
+  jam_min_s: 5
+  jam_max_s: 10
+  first_order_id: 1001
+  hdri: industrial_workshop_foundry
+  render_samples: 8

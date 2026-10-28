@@ -1,0 +1,30 @@
+# S1: jars on a belt pass a capper, then a labeller, then leave the view on the right.
+# Fault keys and the violation keys they lead to are in FAULTS.md.
+name: s1_jar_line
+builder: jar_line
+seed: 1
+duration_s: 60
+fps: 25
+width: 1280
+height: 720
+item_interval_s: 2.5
+camera:
+  position: [0.05, -1.45, 1.5]
+  look_at: [0.0, 0.05, 0.82]
+  focal_mm: 27
+faults:
+  missing_cap: 0.08
+  missing_label: 0.1
+jams: []
+params:
+  speed_m_s: 0.1
+  speed_jitter: 0.08
+  interval_jitter: 0.15
+  camera_jitter_m: 0.05
+  focal_jitter_mm: 1.0
+  # A jam of 7-14 s at the capper keeps jars there past the 5 s limit and drops the rate below 20/min.
+  jam_probability: 0.7
+  jam_min_s: 7
+  jam_max_s: 14
+  hdri: empty_warehouse_01
+  render_samples: 8
