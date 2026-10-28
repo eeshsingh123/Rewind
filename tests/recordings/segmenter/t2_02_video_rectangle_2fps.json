@@ -1,0 +1,346 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.meta.ai/v1/responses",
+    "json": {
+      "model": "sam-3.1",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "rectangle"
+            },
+            {
+              "type": "input_video",
+              "file_id": "file-4929574040607421"
+            }
+          ]
+        }
+      ],
+      "metadata": {
+        "include_confidence": "true",
+        "mask_encoding": "one_bit"
+      },
+      "stream": true
+    }
+  },
+  "status": 200,
+  "response_headers": {
+    "content-type": "text/event-stream",
+    "x-request-id": "6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+    "date": "Wed, 28 Oct 2026 15:17:32 GMT"
+  },
+  "body": {
+    "sse_events": [
+      {
+        "response": {
+          "background": false,
+          "created_at": 1793200652.0,
+          "error": null,
+          "id": "resp_6ae2120c6c581e0c02f04e82",
+          "incomplete_details": null,
+          "instructions": null,
+          "metadata": {
+            "include_confidence": "true",
+            "mask_encoding": "one_bit"
+          },
+          "model": "sam-3.1",
+          "object": "response",
+          "output": [],
+          "parallel_tool_calls": true,
+          "service_tier": "auto",
+          "status": "in_progress",
+          "store": true,
+          "temperature": 1.0,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled"
+        },
+        "sequence_number": 0,
+        "type": "response.created"
+      },
+      {
+        "response": {
+          "background": false,
+          "created_at": 1793200652.0,
+          "error": null,
+          "id": "resp_6ae2120c6c581e0c02f04e82",
+          "incomplete_details": null,
+          "instructions": null,
+          "metadata": {
+            "include_confidence": "true",
+            "mask_encoding": "one_bit"
+          },
+          "model": "sam-3.1",
+          "object": "response",
+          "output": [],
+          "parallel_tool_calls": true,
+          "service_tier": "auto",
+          "status": "in_progress",
+          "store": true,
+          "temperature": 1.0,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled"
+        },
+        "sequence_number": 1,
+        "type": "response.in_progress"
+      },
+      {
+        "item": {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+          "role": "assistant",
+          "status": "in_progress",
+          "type": "message"
+        },
+        "output_index": 0,
+        "sequence_number": 2,
+        "type": "response.output_item.added"
+      },
+      {
+        "content_index": 0,
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "output_index": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "",
+          "type": "output_text"
+        },
+        "sequence_number": 3,
+        "type": "response.content_part.added"
+      },
+      {
+        "content_index": 0,
+        "delta": "<2f>0<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,162,!!!!!0LM$BJubE)OWokg8bi|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 4,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<3f>0<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,86,!!!!!-K7aIWJj.prRx6|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 5,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<4f>0<|box;x1=1277;y1=319;x2=1279;y2=432;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=114,3,!!!!!2NI&9h?P#HQL[QhA#Udr|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 6,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<9f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!.K:{7v9:!z-IqR^|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 7,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<10f>3<|box;x1=78;y1=284;x2=277;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!@K.zUkqjAhV0)G6Ap'8f=7/aG{MYcVMI$g|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 8,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<11f>3<|box;x1=1273;y1=285;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=149,7,!!!!!:LV9apOy0xiUwBneV]_H0e(]7dk!jl|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 9,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<15f>3<|box;x1=1034;y1=284;x2=1233;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!RHnE8-R%p(8-N/(XXMtu%AW=or^-c=-xn#d7P8Gk)Q3{22J1#Q3ALi1U|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 10,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<16f>3<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,162,!!!!!7I7%y*n01xkxU4tU-%V7tiSE?p|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 11,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<17f>3<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,86,!!!!!-LLWWqtHM!72Qr|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 12,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<18f>3<|box;x1=1277;y1=286;x2=1279;y2=432;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=147,3,!!!!!1O.a5#U?HRu1+bpv4St|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 13,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<19f>3<|box;x1=234;y1=284;x2=433;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!HH4/t9#]n#AQ)x3p&=!7oUkK%[s@0LOj?*ECe.P#L!!!|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 14,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<22f>3<|box;x1=1038;y1=284;x2=1237;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!?JB&%@xC/WXh7bAxoJvrUttpl6uP80X!!|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 15,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "delta": "<23f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!0K7noExu){*:Y08bS]|>,4<|box;x1=0;y1=284;x2=196;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,197,!!!!!7rISag/Ts(Y!mB'ophVEGApL+t|>\n",
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 16,
+        "type": "response.output_text.delta"
+      },
+      {
+        "content_index": 0,
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "logprobs": [],
+        "output_index": 0,
+        "sequence_number": 17,
+        "text": "<2f>0<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,162,!!!!!0LM$BJubE)OWokg8bi|>\n<3f>0<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,86,!!!!!-K7aIWJj.prRx6|>\n<4f>0<|box;x1=1277;y1=319;x2=1279;y2=432;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=114,3,!!!!!2NI&9h?P#HQL[QhA#Udr|>\n<9f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!.K:{7v9:!z-IqR^|>\n<10f>3<|box;x1=78;y1=284;x2=277;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!@K.zUkqjAhV0)G6Ap'8f=7/aG{MYcVMI$g|>\n<11f>3<|box;x1=1273;y1=285;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=149,7,!!!!!:LV9apOy0xiUwBneV]_H0e(]7dk!jl|>\n<15f>3<|box;x1=1034;y1=284;x2=1233;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!RHnE8-R%p(8-N/(XXMtu%AW=or^-c=-xn#d7P8Gk)Q3{22J1#Q3ALi1U|>\n<16f>3<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,162,!!!!!7I7%y*n01xkxU4tU-%V7tiSE?p|>\n<17f>3<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,86,!!!!!-LLWWqtHM!72Qr|>\n<18f>3<|box;x1=1277;y1=286;x2=1279;y2=432;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=147,3,!!!!!1O.a5#U?HRu1+bpv4St|>\n<19f>3<|box;x1=234;y1=284;x2=433;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!HH4/t9#]n#AQ)x3p&=!7oUkK%[s@0LOj?*ECe.P#L!!!|>\n<22f>3<|box;x1=1038;y1=284;x2=1237;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!?JB&%@xC/WXh7bAxoJvrUttpl6uP80X!!|>\n<23f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!0K7noExu){*:Y08bS]|>,4<|box;x1=0;y1=284;x2=196;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,197,!!!!!7rISag/Ts(Y!mB'ophVEGApL+t|>\n",
+        "type": "response.output_text.done"
+      },
+      {
+        "content_index": 0,
+        "item_id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+        "output_index": 0,
+        "part": {
+          "annotations": [],
+          "logprobs": [],
+          "text": "<2f>0<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,162,!!!!!0LM$BJubE)OWokg8bi|>\n<3f>0<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,86,!!!!!-K7aIWJj.prRx6|>\n<4f>0<|box;x1=1277;y1=319;x2=1279;y2=432;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=114,3,!!!!!2NI&9h?P#HQL[QhA#Udr|>\n<9f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!.K:{7v9:!z-IqR^|>\n<10f>3<|box;x1=78;y1=284;x2=277;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!@K.zUkqjAhV0)G6Ap'8f=7/aG{MYcVMI$g|>\n<11f>3<|box;x1=1273;y1=285;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=149,7,!!!!!:LV9apOy0xiUwBneV]_H0e(]7dk!jl|>\n<15f>3<|box;x1=1034;y1=284;x2=1233;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!RHnE8-R%p(8-N/(XXMtu%AW=or^-c=-xn#d7P8Gk)Q3{22J1#Q3ALi1U|>\n<16f>3<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,162,!!!!!7I7%y*n01xkxU4tU-%V7tiSE?p|>\n<17f>3<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,86,!!!!!-LLWWqtHM!72Qr|>\n<18f>3<|box;x1=1277;y1=286;x2=1279;y2=432;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=147,3,!!!!!1O.a5#U?HRu1+bpv4St|>\n<19f>3<|box;x1=234;y1=284;x2=433;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!HH4/t9#]n#AQ)x3p&=!7oUkK%[s@0LOj?*ECe.P#L!!!|>\n<22f>3<|box;x1=1038;y1=284;x2=1237;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!?JB&%@xC/WXh7bAxoJvrUttpl6uP80X!!|>\n<23f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!0K7noExu){*:Y08bS]|>,4<|box;x1=0;y1=284;x2=196;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,197,!!!!!7rISag/Ts(Y!mB'ophVEGApL+t|>\n",
+          "type": "output_text"
+        },
+        "sequence_number": 18,
+        "type": "response.content_part.done"
+      },
+      {
+        "item": {
+          "content": [
+            {
+              "annotations": [],
+              "logprobs": [],
+              "text": "<2f>0<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,162,!!!!!0LM$BJubE)OWokg8bi|>\n<3f>0<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,86,!!!!!-K7aIWJj.prRx6|>\n<4f>0<|box;x1=1277;y1=319;x2=1279;y2=432;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=114,3,!!!!!2NI&9h?P#HQL[QhA#Udr|>\n<9f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!.K:{7v9:!z-IqR^|>\n<10f>3<|box;x1=78;y1=284;x2=277;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!@K.zUkqjAhV0)G6Ap'8f=7/aG{MYcVMI$g|>\n<11f>3<|box;x1=1273;y1=285;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=149,7,!!!!!:LV9apOy0xiUwBneV]_H0e(]7dk!jl|>\n<15f>3<|box;x1=1034;y1=284;x2=1233;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!RHnE8-R%p(8-N/(XXMtu%AW=or^-c=-xn#d7P8Gk)Q3{22J1#Q3ALi1U|>\n<16f>3<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,162,!!!!!7I7%y*n01xkxU4tU-%V7tiSE?p|>\n<17f>3<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,86,!!!!!-LLWWqtHM!72Qr|>\n<18f>3<|box;x1=1277;y1=286;x2=1279;y2=432;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=147,3,!!!!!1O.a5#U?HRu1+bpv4St|>\n<19f>3<|box;x1=234;y1=284;x2=433;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!HH4/t9#]n#AQ)x3p&=!7oUkK%[s@0LOj?*ECe.P#L!!!|>\n<22f>3<|box;x1=1038;y1=284;x2=1237;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!?JB&%@xC/WXh7bAxoJvrUttpl6uP80X!!|>\n<23f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!0K7noExu){*:Y08bS]|>,4<|box;x1=0;y1=284;x2=196;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,197,!!!!!7rISag/Ts(Y!mB'ophVEGApL+t|>\n",
+              "type": "output_text"
+            }
+          ],
+          "id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+          "role": "assistant",
+          "status": "completed",
+          "type": "message"
+        },
+        "output_index": 0,
+        "sequence_number": 19,
+        "type": "response.output_item.done"
+      },
+      {
+        "response": {
+          "background": false,
+          "completed_at": 1793200654.0,
+          "created_at": 1793200652.0,
+          "error": null,
+          "id": "resp_6ae2120c6c581e0c02f04e82",
+          "incomplete_details": null,
+          "instructions": null,
+          "metadata": {
+            "include_confidence": "true",
+            "mask_encoding": "one_bit"
+          },
+          "model": "sam-3.1",
+          "object": "response",
+          "output": [
+            {
+              "content": [
+                {
+                  "annotations": [],
+                  "logprobs": [],
+                  "text": "<2f>0<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,162,!!!!!0LM$BJubE)OWokg8bi|>\n<3f>0<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=150,86,!!!!!-K7aIWJj.prRx6|>\n<4f>0<|box;x1=1277;y1=319;x2=1279;y2=432;w=1280;h=720;c=0.8439024686813354|><|mask;x=0;y=0;c=0.8439024686813354;data=114,3,!!!!!2NI&9h?P#HQL[QhA#Udr|>\n<9f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!.K:{7v9:!z-IqR^|>\n<10f>3<|box;x1=78;y1=284;x2=277;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!@K.zUkqjAhV0)G6Ap'8f=7/aG{MYcVMI$g|>\n<11f>3<|box;x1=1273;y1=285;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=149,7,!!!!!:LV9apOy0xiUwBneV]_H0e(]7dk!jl|>\n<15f>3<|box;x1=1034;y1=284;x2=1233;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!RHnE8-R%p(8-N/(XXMtu%AW=or^-c=-xn#d7P8Gk)Q3{22J1#Q3ALi1U|>\n<16f>3<|box;x1=1118;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,162,!!!!!7I7%y*n01xkxU4tU-%V7tiSE?p|>\n<17f>3<|box;x1=1194;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,86,!!!!!-LLWWqtHM!72Qr|>\n<18f>3<|box;x1=1277;y1=286;x2=1279;y2=432;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=147,3,!!!!!1O.a5#U?HRu1+bpv4St|>\n<19f>3<|box;x1=234;y1=284;x2=433;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!HH4/t9#]n#AQ)x3p&=!7oUkK%[s@0LOj?*ECe.P#L!!!|>\n<22f>3<|box;x1=1038;y1=284;x2=1237;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,200,!!!!!?JB&%@xC/WXh7bAxoJvrUttpl6uP80X!!|>\n<23f>3<|box;x1=1114;y1=284;x2=1279;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,166,!!!!!0K7noExu){*:Y08bS]|>,4<|box;x1=0;y1=284;x2=196;y2=433;w=1280;h=720;c=0.827957034111023|><|mask;x=0;y=0;c=0.827957034111023;data=150,197,!!!!!7rISag/Ts(Y!mB'ophVEGApL+t|>\n",
+                  "type": "output_text"
+                }
+              ],
+              "id": "msg_6ad90c1f-53c7-4177-a05a-368438bdd2ff",
+              "role": "assistant",
+              "status": "completed",
+              "type": "message"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "service_tier": "auto",
+          "status": "completed",
+          "store": true,
+          "temperature": 1.0,
+          "tool_choice": "auto",
+          "tools": [],
+          "top_logprobs": 0,
+          "top_p": 1.0,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 0,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens": 0,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 0,
+            "video_frames_processed": 50
+          }
+        },
+        "sequence_number": 20,
+        "type": "response.completed"
+      },
+      "[DONE]"
+    ]
+  }
+}
