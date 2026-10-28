@@ -54,10 +54,18 @@ class PerceptionRunner:
         self, footage: Footage, clip: ProxyClip, concept: str, segmenter: Segmenter
     ) -> tuple[list[Observation], tuple[Charge, ...]]:
         key = CacheKey(footage.content_hash, concept, segmenter.model_version)
-        indices = list(dict.fromkeys(frame_index(t, footage.fps) for t in clip.frame_times))
         stored = await self._store.load(key, footage.id)
-        if all(index in stored.frames for index in indices):
-            return [o for index in indices for o in stored.frames[index]], ()
+        indices = [frame_index(t, footage.fps) for t in clip.frame_times]
+        hits = [o for index in dict.fromkeys(indices) for o in stored.frames.get(index, ())]
+        missing = [index not in stored.frames for index in indices]
+        if not any(missing):
+            return hits, ()
+        if not all(missing):
+            # Only the frames not seen yet are sent: the rest would be paid for twice.
+            spans = _spans_around(clip.frame_times, missing, clip.proxy.fps)
+            clip = await self._proxies.ensure(
+                footage.content_hash, footage.original_key, spans, clip.proxy.fps
+            )
         request = SegmentRequest(
             footage_id=footage.id,
             media_key=clip.proxy.blob_key,
@@ -71,9 +79,10 @@ class PerceptionRunner:
         for observation in result.observations:
             found[frame_index(observation.t, footage.fps)].append(observation)
         frames = dict(stored.frames)
-        frames.update({index: tuple(found[index]) for index in indices})
+        frames.update({frame_index(t, footage.fps): () for t in clip.frame_times})
+        frames.update({index: tuple(seen) for index, seen in found.items()})
         await self._store.save(key, CachedFrames(frames=frames))
-        return list(result.observations), result.charges
+        return hits + list(result.observations), result.charges
 
 
 def _group_windows(plan: SamplingPlan) -> dict[tuple[str, float], list[TimeSpan]]:
@@ -109,3 +118,25 @@ def _chunks(spans: Sequence[TimeSpan], fps: float, max_frames: int) -> list[list
             used += end - start
             start = end
     return [chunk for chunk in chunks if chunk]
+
+
+# A span around each run of adjacent flagged frames, narrow enough to hold no other frame.
+def _spans_around(
+    frame_times: Sequence[float], flagged: Sequence[bool], fps: float
+) -> list[TimeSpan]:
+    margin = 0.4 / fps
+    spans: list[TimeSpan] = []
+    run_start: float | None = None
+    for position, (t, flag) in enumerate(zip(frame_times, flagged, strict=True)):
+        if flag and run_start is None:
+            run_start = t
+        continues = (
+            position + 1 < len(flagged)
+            and flagged[position + 1]
+            and frame_times[position + 1] - t < 1.5 / fps
+        )
+        last_of_run = flag and not continues
+        if last_of_run and run_start is not None:
+            spans.append(TimeSpan(start=max(0.0, run_start - margin), end=t + margin))
+            run_start = None
+    return spans

@@ -172,6 +172,32 @@ async def test_a_new_concept_on_processed_footage_pays_only_for_itself(
     assert (result.paid_requests, result.cached_requests) == (1, 2)
 
 
+async def test_a_partly_cached_window_pays_only_for_the_frames_not_seen(
+    blobs: LocalDiskBlobStore,
+) -> None:
+    video = FakeVideo()
+    proxies = ProxyMaker(blobs, video, max_height=720)
+    runner = PerceptionRunner(proxies, ParquetObservationStore(blobs))
+    segmenter = FakeSegmenter()
+    await blobs.write("footage/line.mp4", b"original")
+    ingested = await Ingest(blobs, video, FakeActivity(), proxies, 2.0).ingest(
+        "f1", "line1", "footage/line.mp4"
+    )
+    planner = Planner(STRATEGIES)
+
+    def plan(*spans: TimeSpan):
+        return planner.plan("dense_track", PlanInput(ingested.footage, spans, (JAR_RULE,), 2.0))
+
+    await runner.run(ingested.footage, plan(TimeSpan(start=0, end=5)), segmenter)
+    wider = plan(TimeSpan(start=0, end=8), TimeSpan(start=20, end=22))
+    result = await runner.run(ingested.footage, wider, segmenter)
+
+    new_times = [r.frame_times for r in segmenter.requests[2:]]
+    assert new_times == [(5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 20.0, 20.5, 21.0, 21.5, 22.0)] * 2
+    jar_times = {o.t for o in result.observations if o.concept == "glass jar"}
+    assert {0.0, 4.0, 5.5, 7.5, 20.0, 22.0} <= jar_times
+
+
 async def test_windows_longer_than_the_frame_limit_are_split_into_requests(
     blobs: LocalDiskBlobStore,
 ) -> None:
