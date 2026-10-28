@@ -1,0 +1,33 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.import_linter_cache/
+.coverage
+htmlcov/
+
+# Local data root (blobs, proxies, clips, parquet)
+data/
+
+# Spike sessions write here; never committed
+spikes/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
