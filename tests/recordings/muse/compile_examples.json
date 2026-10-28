@@ -1,0 +1,1981 @@
+{
+  "note": "[muse-spark-1.3-contributor] T3 live smoke: the 8 acceptance sentences compiled via /chat/completions with response_format json_schema, effort minimal, prompt_cache_key set (2026-10-28)",
+  "exchanges": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "every jar needs a cap and a label before it leaves the view"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "140",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993797",
+        "x-request-id": "886a421e-0b35-4548-9a2a-ecfe944c85bf",
+        "date": "Wed, 28 Oct 2026 15:18:32 GMT"
+      },
+      "elapsed_s": 3.01,
+      "body": {
+        "id": "chatcmpl-01a18317-6b1b-76d7-a3d5-65d94032783c",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"dwell_max_s\": null, \"dwell_zone\": null, \"entity\": {\"key\": \"jar\", \"phrase\": \"jar\"}, \"order\": [], \"parts\": [{\"key\": \"cap\", \"phrase\": \"cap\"}, {\"key\": \"label\", \"phrase\": \"label\"}], \"rate_min_per_minute\": null, \"requirements\": [{\"kind\": \"has\", \"n\": null, \"part\": \"cap\", \"timing\": \"at_checkpoint\", \"zone\": null}, {\"kind\": \"has\", \"n\": null, \"part\": \"label\", \"timing\": \"at_checkpoint\", \"zone\": null}], \"unsupported\": [], \"zones\": []}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200712,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 209,
+          "prompt_tokens": 1889,
+          "total_tokens": 2098,
+          "completion_tokens_details": {
+            "reasoning_tokens": 44
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "each jar needs a cap and must be blue"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "139",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993752",
+        "x-request-id": "7db4604a-a090-4629-9489-d76e42380991",
+        "date": "Wed, 28 Oct 2026 15:18:36 GMT"
+      },
+      "elapsed_s": 3.79,
+      "body": {
+        "id": "chatcmpl-01a18317-79ce-7536-8ffd-ceff40cd1b1f",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"dwell_max_s\": null, \"dwell_zone\": null, \"entity\": {\"key\": \"jar\", \"phrase\": \"jar\"}, \"order\": [], \"parts\": [{\"key\": \"cap\", \"phrase\": \"cap\"}], \"rate_min_per_minute\": null, \"requirements\": [{\"kind\": \"has\", \"n\": null, \"part\": \"cap\", \"timing\": \"at_checkpoint\", \"zone\": null}], \"unsupported\": [\"must be blue\"], \"zones\": []}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200716,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 282,
+          "prompt_tokens": 1885,
+          "total_tokens": 2167,
+          "completion_tokens_details": {
+            "reasoning_tokens": 155
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "a jar must not stay in the capper zone for more than 5 seconds"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "139",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993568",
+        "x-request-id": "54f5cdb6-0a12-4701-85df-16b621041ac8",
+        "date": "Wed, 28 Oct 2026 15:18:39 GMT"
+      },
+      "elapsed_s": 2.71,
+      "body": {
+        "id": "chatcmpl-01a18317-848e-7386-8de0-a1689eae74a1",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"dwell_max_s\": 5.0, \"dwell_zone\": \"capper\", \"entity\": {\"key\": \"jar\", \"phrase\": \"jar\"}, \"order\": [], \"parts\": [], \"rate_min_per_minute\": null, \"requirements\": [], \"unsupported\": [], \"zones\": [{\"key\": \"capper\", \"phrase\": \"capper machine\"}]}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200718,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 230,
+          "prompt_tokens": 1892,
+          "total_tokens": 2122,
+          "completion_tokens_details": {
+            "reasoning_tokens": 128
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "at least 20 jars per minute must pass"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "138",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993430",
+        "x-request-id": "d4d53ec4-affa-4a02-b9e9-cfb2d6947766",
+        "date": "Wed, 28 Oct 2026 15:18:42 GMT"
+      },
+      "elapsed_s": 3.16,
+      "body": {
+        "id": "chatcmpl-01a18317-9103-720e-afb4-a184e6b15824",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"dwell_max_s\": null, \"dwell_zone\": null, \"entity\": {\"key\": \"jar\", \"phrase\": \"jar\"}, \"order\": [], \"parts\": [], \"rate_min_per_minute\": 20, \"requirements\": [], \"unsupported\": [], \"zones\": []}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200722,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 203,
+          "prompt_tokens": 1885,
+          "total_tokens": 2088,
+          "completion_tokens_details": {
+            "reasoning_tokens": 119
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "every carton needs a label when it enters sealing"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "137",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993326",
+        "x-request-id": "efa7e5e2-8e47-4186-a903-b6860c834dae",
+        "date": "Wed, 28 Oct 2026 15:18:45 GMT"
+      },
+      "elapsed_s": 3.68,
+      "body": {
+        "id": "chatcmpl-01a18317-9f37-7539-98a0-154d72714006",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"enters\", \"checkpoint_zone\": \"sealing\", \"dwell_max_s\": null, \"dwell_zone\": null, \"entity\": {\"key\": \"carton\", \"phrase\": \"carton\"}, \"order\": [], \"parts\": [{\"key\": \"label\", \"phrase\": \"label\"}], \"rate_min_per_minute\": null, \"requirements\": [{\"kind\": \"has\", \"n\": null, \"part\": \"label\", \"timing\": \"at_checkpoint\", \"zone\": null}], \"unsupported\": [], \"zones\": [{\"key\": \"sealing\", \"phrase\": \"sealing station\"}]}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200725,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 224,
+          "prompt_tokens": 1885,
+          "total_tokens": 2109,
+          "completion_tokens_details": {
+            "reasoning_tokens": 84
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "every carton must have tape before it leaves the view"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "136",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993201",
+        "x-request-id": "b583df54-2377-4744-bffe-348adbf58a1b",
+        "date": "Wed, 28 Oct 2026 15:18:48 GMT"
+      },
+      "elapsed_s": 2.99,
+      "body": {
+        "id": "chatcmpl-01a18317-aad6-705d-96ba-8c03b1182a3c",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"dwell_max_s\": null, \"dwell_zone\": null, \"entity\": {\"key\": \"carton\", \"phrase\": \"carton\"}, \"order\": [], \"parts\": [{\"key\": \"tape\", \"phrase\": \"tape\"}], \"rate_min_per_minute\": null, \"requirements\": [{\"kind\": \"has\", \"n\": null, \"part\": \"tape\", \"timing\": \"at_checkpoint\", \"zone\": null}], \"unsupported\": [], \"zones\": []}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200728,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 241,
+          "prompt_tokens": 1886,
+          "total_tokens": 2127,
+          "completion_tokens_details": {
+            "reasoning_tokens": 116
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "the carton must be closed with all 4 flaps down before tape"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "136",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993968",
+        "x-request-id": "6c5a7b38-6a69-4e8a-a1f0-ef3e9090af6f",
+        "date": "Wed, 28 Oct 2026 15:18:58 GMT"
+      },
+      "elapsed_s": 9.27,
+      "body": {
+        "id": "chatcmpl-01a18317-cf1c-7618-9e48-9c158472c0ae",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"dwell_max_s\": null, \"dwell_zone\": null, \"entity\": {\"key\": \"carton\", \"phrase\": \"carton\"}, \"order\": [{\"first\": \"flap\", \"then\": \"tape\"}], \"parts\": [{\"key\": \"flap\", \"phrase\": \"folded-down flap\"}, {\"key\": \"tape\", \"phrase\": \"tape\"}], \"rate_min_per_minute\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"n\": 4, \"part\": \"flap\", \"timing\": \"ever_before\", \"zone\": null}], \"unsupported\": [], \"zones\": []}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200737,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 806,
+          "prompt_tokens": 1890,
+          "total_tokens": 2696,
+          "completion_tokens_details": {
+            "reasoning_tokens": 648
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.meta.ai/v1/chat/completions",
+        "json": {
+          "model": "muse-spark-1.3-contributor",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You translate one plain-English rule for a production or packing line into JSON. A camera watches the line. A segmentation model finds each item (the entity) and its parts from short noun phrases. A deterministic engine then checks the rule for every item.\n\nThe rule language:\n- entity: the kind of item the rule is about. key is snake_case; phrase is a short noun phrase.\n- parts: everything the item must have, one entry per part. key is snake_case of the part's noun (\"shipping label\" -> shipping_label, \"QR code\" -> qr_code); phrase is a short singular noun phrase describing how the part looks, for the segmentation model. A state the camera can see belongs in the phrase (\"4 flaps down\" -> phrase \"folded-down flap\"), not in unsupported.\n- zones: every named area the rule uses. key is snake_case of the name the user gives, without generic words such as zone, area or station (\"the capper zone\" -> capper); phrase is a short noun phrase describing how the area looks.\n- checkpoint: the moment each item is checked.\n  - \"exits_view\": when it leaves the view, leaves, exits, or passes. Use this when the sentence names no moment.\n  - \"enters\" with checkpoint_zone: when it enters or reaches a named zone.\n  - \"end_of_footage\": at the end of the footage or video.\n  checkpoint_zone is null unless checkpoint is \"enters\".\n- requirements: a list with one entry per thing the item must satisfy. Never merge two needs into one entry, and never drop one.\n  - \"has\" with part: the part is present.\n  - \"count_at_least\" with part and n: at least n of the part are visible at once.\n  - \"in_zone\" with zone: the item is inside the zone.\n  Set the fields a kind does not use to null.\n  timing \"at_checkpoint\": it must hold at the checkpoint (\"needs a cap before it leaves\" or \"when it enters\" both mean at the checkpoint). timing \"ever_before\": it must have held at some point before the checkpoint (\"must go through\", \"at some point\", or a need before another part).\n- order: a list of {first, then} part keys, when one part must appear before another.\n- dwell_zone and dwell_max_s: an item must not stay in the zone longer than dwell_max_s seconds.\n- rate_min_per_minute: at least this many items per minute must reach the checkpoint.\n- unsupported: every part of the sentence the language cannot express (colour, size, weight, text content, people, anything else), quoted from the sentence. Express everything else.\nDurations are in seconds and rates per minute: convert other units. Use only parts and zones the sentence names. Every key in requirements and order must be listed in parts or zones.\n\nExamples:\n\nSentence: Every bottle needs a lid and a sticker before it leaves.\nJSON: {\"entity\": {\"key\": \"bottle\", \"phrase\": \"bottle\"}, \"parts\": [{\"key\": \"lid\", \"phrase\": \"lid\"}, {\"key\": \"sticker\", \"phrase\": \"sticker\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"has\", \"part\": \"lid\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}, {\"kind\": \"has\", \"part\": \"sticker\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: Each pallet must have a wrap when it reaches the dock and must weigh under 500 kg.\nJSON: {\"entity\": {\"key\": \"pallet\", \"phrase\": \"pallet\"}, \"parts\": [{\"key\": \"wrap\", \"phrase\": \"plastic stretch wrap\"}], \"zones\": [{\"key\": \"dock\", \"phrase\": \"loading dock\"}], \"checkpoint\": \"enters\", \"checkpoint_zone\": \"dock\", \"requirements\": [{\"kind\": \"has\", \"part\": \"wrap\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": [\"must weigh under 500 kg\"]}\n\nSentence: Each tray must hold 6 cans before the film wrap.\nJSON: {\"entity\": {\"key\": \"tray\", \"phrase\": \"tray\"}, \"parts\": [{\"key\": \"can\", \"phrase\": \"can\"}, {\"key\": \"film_wrap\", \"phrase\": \"plastic film wrap\"}], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"count_at_least\", \"part\": \"can\", \"zone\": null, \"n\": 6, \"timing\": \"ever_before\"}], \"order\": [{\"first\": \"can\", \"then\": \"film_wrap\"}], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: No box may sit in the scale area for longer than 2 minutes.\nJSON: {\"entity\": {\"key\": \"box\", \"phrase\": \"box\"}, \"parts\": [], \"zones\": [{\"key\": \"scale\", \"phrase\": \"weighing scale\"}], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": \"scale\", \"dwell_max_s\": 120, \"rate_min_per_minute\": null, \"unsupported\": []}\n\nSentence: The line must ship at least 600 bags per hour.\nJSON: {\"entity\": {\"key\": \"bag\", \"phrase\": \"bag\"}, \"parts\": [], \"zones\": [], \"checkpoint\": \"exits_view\", \"checkpoint_zone\": null, \"requirements\": [], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": 10, \"unsupported\": []}\n\nSentence: Every crate must pass through the wash zone and have a barcode by the end of the video.\nJSON: {\"entity\": {\"key\": \"crate\", \"phrase\": \"crate\"}, \"parts\": [{\"key\": \"barcode\", \"phrase\": \"barcode\"}], \"zones\": [{\"key\": \"wash\", \"phrase\": \"washing station\"}], \"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"requirements\": [{\"kind\": \"in_zone\", \"part\": null, \"zone\": \"wash\", \"n\": null, \"timing\": \"ever_before\"}, {\"kind\": \"has\", \"part\": \"barcode\", \"zone\": null, \"n\": null, \"timing\": \"at_checkpoint\"}], \"order\": [], \"dwell_zone\": null, \"dwell_max_s\": null, \"rate_min_per_minute\": null, \"unsupported\": []}\n"
+            },
+            {
+              "role": "user",
+              "content": "every carton needs a shipping label and a qr code at the end of the footage"
+            }
+          ],
+          "max_completion_tokens": 2048,
+          "reasoning_effort": "minimal",
+          "prompt_cache_key": "rewind-63bbbad3b0f8e912",
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "reply",
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entity",
+                  "parts",
+                  "zones",
+                  "checkpoint",
+                  "checkpoint_zone",
+                  "requirements",
+                  "order",
+                  "dwell_zone",
+                  "dwell_max_s",
+                  "rate_min_per_minute",
+                  "unsupported"
+                ],
+                "properties": {
+                  "entity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "key",
+                      "phrase"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "phrase": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "parts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "key",
+                        "phrase"
+                      ],
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "phrase": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "checkpoint": {
+                    "type": "string",
+                    "enum": [
+                      "enters",
+                      "exits_view",
+                      "end_of_footage"
+                    ]
+                  },
+                  "checkpoint_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "requirements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "part",
+                        "zone",
+                        "n",
+                        "timing"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "count_at_least",
+                            "has",
+                            "in_zone"
+                          ]
+                        },
+                        "part": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "zone": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "n": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "timing": {
+                          "type": "string",
+                          "enum": [
+                            "at_checkpoint",
+                            "ever_before"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "order": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "first",
+                        "then"
+                      ],
+                      "properties": {
+                        "first": {
+                          "type": "string"
+                        },
+                        "then": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "dwell_zone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dwell_max_s": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "rate_min_per_minute": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "unsupported": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "status": 200,
+      "response_headers": {
+        "content-type": "application/json",
+        "x-ratelimit-limit-requests": "150",
+        "x-ratelimit-remaining-requests": "136",
+        "x-ratelimit-limit-tokens": "3000000",
+        "x-ratelimit-remaining-tokens": "2993234",
+        "x-request-id": "d7bb1137-95ef-4a94-903f-88e33338d299",
+        "date": "Wed, 28 Oct 2026 15:19:01 GMT"
+      },
+      "elapsed_s": 3.28,
+      "body": {
+        "id": "chatcmpl-01a18317-dbe2-76ac-8d8e-d685b13c4185",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "{\"checkpoint\": \"end_of_footage\", \"checkpoint_zone\": null, \"dwell_max_s\": null, \"dwell_zone\": null, \"entity\": {\"key\": \"carton\", \"phrase\": \"carton\"}, \"order\": [], \"parts\": [{\"key\": \"shipping_label\", \"phrase\": \"shipping label\"}, {\"key\": \"qr_code\", \"phrase\": \"qr code\"}], \"rate_min_per_minute\": null, \"requirements\": [{\"kind\": \"has\", \"n\": null, \"part\": \"shipping_label\", \"timing\": \"at_checkpoint\", \"zone\": null}, {\"kind\": \"has\", \"n\": null, \"part\": \"qr_code\", \"timing\": \"at_checkpoint\", \"zone\": null}], \"unsupported\": [], \"zones\": []}",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "logprobs": null
+          }
+        ],
+        "created": 1793200741,
+        "model": "muse-spark-1.3-contributor",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 272,
+          "prompt_tokens": 1892,
+          "total_tokens": 2164,
+          "completion_tokens_details": {
+            "reasoning_tokens": 97
+          },
+          "prompt_tokens_details": {
+            "cached_tokens": 1777
+          }
+        }
+      }
+    }
+  ]
+}
