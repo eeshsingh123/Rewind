@@ -33,6 +33,7 @@ from rewind.core.conversation.agent import AgentReply
 from rewind.core.conversation.conversation import Command
 from rewind.core.conversation.store import ConversationStore
 from rewind.core.conversation.tools import (
+    Job,
     ToolArguments,
     ToolError,
     ToolResult,
@@ -40,7 +41,7 @@ from rewind.core.conversation.tools import (
     TurnContext,
 )
 from rewind.core.conversation.workspace_tools import resolve_line
-from rewind.core.ports import JobPayload, JobRunner, Repository
+from rewind.core.ports import JobPayload, Repository
 from rewind.core.rules import RuleCompileError, RuleCompiler, normalize, zone_keys
 
 CONFIRM_TOKEN = "analyze"
@@ -179,16 +180,12 @@ class Analyze:
         self,
         repository: Repository,
         store: ConversationStore,
-        jobs: JobRunner,
         analysis: Analysis,
-        capabilities: Mapping[str, ChannelCapabilities],
         settings: AnalyzeSettings,
     ) -> None:
         self._repository = repository
         self._store = store
-        self._jobs = jobs
         self._analysis = analysis
-        self._capabilities = capabilities
         self._settings = settings
 
     def tool(self) -> ToolSpec[RecordingArguments]:
@@ -204,8 +201,9 @@ class Analyze:
         payload = await self._store.take_token(CONFIRM_TOKEN, argument, context.now)
         if payload is None:
             return AgentReply("That button has expired or was used already. Ask me again.")
-        await self._jobs.submit(ANALYZE_JOB, payload)
-        return AgentReply("Started. I'll message you here when it's done.")
+        return AgentReply(
+            "Started. I'll message you here when it's done.", jobs=(Job(ANALYZE_JOB, payload),)
+        )
 
     async def cancel(self, context: TurnContext, argument: str) -> AgentReply:
         if argument:
@@ -227,6 +225,11 @@ class Analyze:
             f"already seen (free), about ${f.usd:.2f}"
             for f in estimate.footage
         ]
+        if estimate.parts_on_stills:
+            facts.append(
+                f"plus about ${estimate.per_item_usd:.4f} per item, for one photo of each item "
+                f"to look for: {', '.join(estimate.parts_on_stills)}"
+            )
         if estimate.zones_to_find:
             facts.append(
                 f"finding {', '.join(estimate.zones_to_find)} in the video once: "
@@ -241,18 +244,16 @@ class Analyze:
             "rule_ids": [r.id for r in rules],
             "channel": context.chat.channel,
             "chat_id": context.chat.chat_id,
-            "max_media_bytes": self._capabilities[context.chat.channel].max_media_bytes,
         }
         if spent + total > self._settings.daily_cap_usd:
             facts.append("NOT started: it would pass today's limit")
             return ToolResult("\n".join(facts))
         if total <= self._settings.confirm_above_usd:
-            await self._jobs.submit(ANALYZE_JOB, payload)
             facts.append(
                 f"started at once (under ${self._settings.confirm_above_usd:.2f}); "
                 "results will arrive in this chat"
             )
-            return ToolResult("\n".join(facts))
+            return ToolResult("\n".join(facts), jobs=(Job(ANALYZE_JOB, payload),))
         token = secrets.token_urlsafe(12)
         await self._store.put_token(CONFIRM_TOKEN, token, dict(payload), context.now + CONFIRM_TTL)
         facts.append("NOT started yet: waiting for the person to tap the confirm button")
@@ -311,7 +312,8 @@ class Findings:
                 parts.append(f"{name}: no violations found (or not checked yet)")
                 continue
             listed = "\n".join(
-                f"{index}. {violation_line(v, numbers)}" for index, v in enumerate(found, 1)
+                f"{index}. {violation_line(v, numbers.get(v.rule_id))}"
+                for index, v in enumerate(found, 1)
             )
             parts.append(f"{name}: {len(found)} violations\n{listed}")
         return ToolResult("\n\n".join(parts))

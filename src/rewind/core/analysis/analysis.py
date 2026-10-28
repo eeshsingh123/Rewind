@@ -1,7 +1,10 @@
+import dataclasses
+import hashlib
 import logging
 import math
 import tempfile
 import time
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -24,7 +27,22 @@ from rewind.contracts import (
     Violation,
     Zone,
 )
-from rewind.core.analysis.tracks import item_label, naive_tracks
+from rewind.core.analysis.parts import (
+    PartLooker,
+    StillGrabber,
+    checkpoint_parts,
+    still_times,
+    tracking_spec,
+)
+from rewind.core.analysis.proof import ClipMaker, ProofMarks, proof_marks
+from rewind.core.analysis.replies import (
+    RuleOutcome,
+    clip_caption,
+    duration_text,
+    plural,
+    rule_summary,
+)
+from rewind.core.analysis.tracks import naive_tracks
 from rewind.core.budget import BudgetExceededError, BudgetScope
 from rewind.core.perception import (
     CacheKey,
@@ -47,11 +65,14 @@ from rewind.core.ports import (
     VideoToolsError,
 )
 from rewind.core.rules import (
+    Check,
     Keyframe,
     RuleCompileError,
     RuleCompiler,
     RuleError,
     Scene,
+    build_items,
+    checks,
     evaluate,
     find_zone,
     zone_keys,
@@ -77,12 +98,6 @@ class Notifier(Protocol):
     ) -> None: ...
 
     async def progress(self, channel: str, chat_id: str, key: str, text: str) -> None: ...
-
-
-class StillGrabber(Protocol):
-    async def still(self, source: Path, t: float, destination: Path) -> None:
-        """Writes the frame at footage time t as a JPEG."""
-        ...
 
 
 class Segmenters(Protocol):
@@ -112,6 +127,9 @@ class Estimate:
     # Areas the rules name that are not drawn: each is found once per line from one still.
     zones_to_find: tuple[str, ...]
     zones_usd: Decimal
+    # Parts looked for on one still per item; how many items there are is known only after.
+    parts_on_stills: tuple[str, ...]
+    per_item_usd: Decimal
 
     @property
     def total_usd(self) -> Decimal:
@@ -125,18 +143,16 @@ class Clip:
     caption: str
 
 
+@dataclass(frozen=True, slots=True)
+class Checked:
+    line: Line
+    outcomes: tuple[RuleOutcome, ...]
+    cost: Decimal
+    skipped: tuple[str, ...]
+
+
 def footage_name(footage: Footage) -> str:
     return PurePosixPath(footage.original_key).name
-
-
-def clock_time(t: float) -> str:
-    minutes, seconds = divmod(int(t), 60)
-    return f"{minutes:02d}:{seconds:02d}"
-
-
-def duration_text(seconds: float) -> str:
-    minutes, rest = divmod(round(seconds), 60)
-    return f"{minutes} min {rest} s" if minutes else f"{rest} s"
 
 
 class Analysis:
@@ -152,6 +168,7 @@ class Analysis:
         compiler_for: Callable[[str], RuleCompiler],
         video: VideoTools,
         stills: StillGrabber,
+        clips: ClipMaker,
         notifier: Notifier,
         settings: AnalysisSettings,
     ) -> None:
@@ -165,8 +182,10 @@ class Analysis:
         self._compiler_for = compiler_for
         self._video = video
         self._stills = stills
+        self._clips = clips
         self._notifier = notifier
         self._settings = settings
+        self._parts = PartLooker(blobs, observations, stills)
 
     async def handle_ingest(self, payload: JobPayload) -> None:
         channel, chat_id = str(payload["channel"]), str(payload["chat_id"])
@@ -200,7 +219,8 @@ class Analysis:
             parts.append(f"Something moves for {duration_text(moving)}; I'll only check that.")
         rules = [rule for rule in await self._repository.rules(line.id) if rule.active]
         if rules:
-            parts.append(f"\n\nThis line has {len(rules)} rules. Ask me to check it.")
+            count = f"{len(rules)} {plural('rule', len(rules))}"
+            parts.append(f"\n\nThis line has {count}. Ask me to check it.")
         else:
             parts.append(
                 "\n\nThis line has no rules yet. Tell me what every item must have or do, "
@@ -215,13 +235,17 @@ class Analysis:
         segmenter = self._segmenters.video(BudgetScope(workspace_id))
         estimates = [await self._estimate_footage(footage_item, specs, segmenter)
                      for footage_item in footage]  # fmt: skip
-        missing = _missing_zones(line, specs)
-        zones_usd = Decimal(0)
-        if missing and footage:
-            image = self._segmenters.image(BudgetScope(workspace_id))
+        image = self._segmenters.image(BudgetScope(workspace_id))
+        one_image = Decimal(0)
+        if footage:
             request = SegmentRequest(footage[0].id, "still.jpg", 1, 1, (0.0,), _NO_PROMPT)
-            zones_usd = CostEstimate(charges=image.estimate(request)).total_usd * len(missing)
-        return Estimate(tuple(estimates), missing, zones_usd)
+            one_image = CostEstimate(charges=image.estimate(request)).total_usd
+        missing = _missing_zones(line, specs)
+        on_stills = tuple(sorted({phrase for spec in specs for phrase in checkpoint_parts(spec)}))
+        return Estimate(
+            tuple(estimates), missing, one_image * len(missing), on_stills,
+            one_image * len(on_stills),
+        )  # fmt: skip
 
     async def handle_analyze(self, payload: JobPayload) -> None:
         workspace_id = str(payload["workspace_id"])
@@ -237,52 +261,52 @@ class Analysis:
         numbers = await self.rule_numbers(line.id)
         started = time.monotonic()
         spent = Decimal(0)
-        summaries: list[str] = []
-        first: tuple[Footage, Violation, int] | None = None
+        sections: list[str] = []
+        with_findings: Footage | None = None
         for index, footage_id in enumerate(footage_ids, 1):
             footage = await self._repository.get_footage(footage_id)
             if footage is None:
                 continue
             name = footage_name(footage)
-            await self._notifier.progress(
-                channel, chat_id, job_id,
-                f"Checking *{name}* ({index} of {len(footage_ids)})…",
-            )  # fmt: skip
+            of = f" ({index} of {len(footage_ids)})" if len(footage_ids) > 1 else ""
+            await self._notifier.progress(channel, chat_id, job_id, f"Checking *{name}*{of}…")
             try:
-                line, violations, items, cost, skipped = await self._check(
-                    line, footage, rules, scope
-                )
+                checked = await self._check(line, footage, rules, numbers, scope)
             except BudgetExceededError as error:
-                summaries.append(f"I stopped before *{name}*: {error}.")
+                sections.append(f"I stopped before *{name}*: {error}.")
                 break
-            except (SegmenterError, VideoToolsError, RuleCompileError) as error:
+            except (SegmenterError, VideoToolsError, RuleCompileError):
                 logger.exception("analysis of %s failed", footage.id)
-                summaries.append(f"*{name}*: the check failed ({type(error).__name__}).")
+                sections.append(f"*{name}*: something went wrong while checking it. Try again.")
                 continue
-            spent += cost
-            summaries.append(_summary(name, violations, items, numbers, skipped))
-            if first is None and violations:
-                first = (footage, violations[0], len(violations))
+            line = checked.line
+            spent += checked.cost
+            sections.append(_footage_summary(footage, checked))
+            if with_findings is None and any(o.violations for o in checked.outcomes):
+                with_findings = footage
         elapsed = duration_text(time.monotonic() - started)
-        text = f"Done in {elapsed} for ${spent:.2f}.\n\n" + "\n\n".join(summaries)
-        await self._notifier.notify(channel, chat_id, text)
-        if first is not None:
-            footage, violation, count = first
-            clip = await self.clip(footage, violation, 1, count, _max_bytes(payload))
-            await self._notifier.notify(
-                channel, chat_id, clip.caption, clip.media, clip_buttons(footage, 1, count)
-            )
+        text = f"Done in {elapsed} for ${spent:.2f}.\n\n" + "\n\n".join(sections)
+        buttons = ()
+        if with_findings is not None:
+            buttons = (Button(label="Show clips", value=f"/clip {with_findings.id} 1"),)
+        await self._notifier.notify(channel, chat_id, text, buttons=buttons)
 
     async def clip(
         self, footage: Footage, violation: Violation, number: int, count: int, max_bytes: int
     ) -> Clip:
-        caption = (
-            f"{number} of {count} · {clock_time(violation.t)} · "
-            f"{item_label(violation.track_id)}: {violation.reason}"
-        )
+        numbers = await self.rule_numbers(footage.line_id)
+        caption = clip_caption(violation, number, count, numbers.get(violation.rule_id))
         if max_bytes <= 0:
             return Clip((), caption)
-        key = f"clips/{violation.id}.mp4"
+        marks_key = _marks_key(violation.id)
+        marks = (
+            _MARKS.validate_json(await self._blobs.read(marks_key))
+            if await self._blobs.exists(marks_key)
+            else ProofMarks(marks=())
+        )
+        # Named by what is drawn, so a rerun that changes the boxes renders a new clip.
+        drawn = hashlib.sha256(_MARKS.dump_json(marks)).hexdigest()[:12]
+        key = f"proof/{violation.id}-{drawn}.mp4"
         if not await self._blobs.exists(key):
             span = TimeSpan(
                 start=max(0.0, violation.clip.start),
@@ -291,7 +315,10 @@ class Analysis:
             source = await self._blobs.local_path(footage.original_key)
             with tempfile.TemporaryDirectory() as workdir:
                 destination = Path(workdir) / "clip.mp4"
-                await self._video.cut_clip(source, destination, span)
+                if marks.marks:
+                    await self._clips.make_clip(source, destination, span, marks.marks)
+                else:
+                    await self._video.cut_clip(source, destination, span)
                 await self._blobs.write_file(key, destination)
         size = (await self._blobs.local_path(key)).stat().st_size
         if size > max_bytes:
@@ -303,31 +330,70 @@ class Analysis:
         return {rule.id: index for index, rule in enumerate(rules, 1)}
 
     async def _check(
-        self, line: Line, footage: Footage, rules: Sequence[Rule], scope: BudgetScope
-    ) -> tuple[Line, tuple[Violation, ...], int, Decimal, list[str]]:
-        specs = tuple(rule.spec for rule in rules)
+        self,
+        line: Line,
+        footage: Footage,
+        rules: Sequence[Rule],
+        numbers: Mapping[str, int],
+        scope: BudgetScope,
+    ) -> Checked:
         spans = await self.active_spans(footage)
+        tracked = tuple(tracking_spec(rule.spec) for rule in rules)
         plan = self._planner.plan(
-            self._settings.strategy, PlanInput(footage, spans, specs, self._settings.fps)
+            self._settings.strategy, PlanInput(footage, spans, tracked, self._settings.fps)
         )
         result = await self._runner.run(footage, plan, self._segmenters.video(scope))
-        cost = CostEstimate(charges=result.charges).total_usd
+        charges = list(result.charges)
         line, zone_charges = await self._find_zones(line, footage, spans, rules, scope)
-        cost += CostEstimate(charges=zone_charges).total_usd
+        charges += zone_charges
         tracks = naive_tracks(footage.id, result.observations, max(1.0, 3 / self._settings.fps))
         scene = Scene(footage.id, footage.duration_s, tracks, result.observations, line.zones)
-        violations: list[Violation] = []
+        judged: dict[str, tuple[Check, ...]] = {}
         skipped: list[str] = []
+        times: defaultdict[str, set[float]] = defaultdict(set)
         for rule in rules:
             try:
-                violations += evaluate(rule.id, rule.spec, scene)
+                judged[rule.id] = checks(rule.spec, scene)
             except RuleError as error:
-                skipped.append(f"{rule.text} ({error})")
-        await self._repository.save_violations(violations)
-        entities = {spec.entity.phrase for spec in specs}
-        items = sum(1 for track in tracks if track.concept in entities)
-        ordered = tuple(sorted(violations, key=lambda v: (v.t, v.id)))
-        return line, ordered, items, cost, skipped
+                skipped.append(f"I couldn't check rule {numbers.get(rule.id, '?')}: {error}.")
+                continue
+            for concept, wanted in still_times(rule.spec, judged[rule.id]).items():
+                times[concept] |= wanted
+        looks = await self._parts.look(footage, times, self._segmenters.image(scope))
+        charges += looks.charges
+        scene = dataclasses.replace(scene, observations=scene.observations + looks.observations)
+        outcomes: list[RuleOutcome] = []
+        for rule in rules:
+            if rule.id not in judged:
+                continue
+            found = evaluate(rule.id, rule.spec, scene)
+            await self._save_marks(rule.spec, scene, judged[rule.id], found)
+            number = numbers.get(rule.id, 0)
+            outcomes.append(RuleOutcome(number, rule, len(judged[rule.id]), found))
+        violations = [v for outcome in outcomes for v in outcome.violations]
+        await self._repository.replace_violations(footage.id, list(judged), violations)
+        cost = CostEstimate(charges=tuple(charges)).total_usd
+        return Checked(line, tuple(outcomes), cost, tuple(skipped))
+
+    # What each proof clip draws is saved now, while the tracks are at hand, so a clip asked
+    # for later shows exactly the boxes this check decided on.
+    async def _save_marks(
+        self,
+        spec: RuleSpec,
+        scene: Scene,
+        judged: Sequence[Check],
+        found: Sequence[Violation],
+    ) -> None:
+        items = {
+            item.track.track_id: item
+            for item in build_items(spec, scene.tracks, scene.observations, {})
+        }
+        failed = {v.track_id: v for v in found if v.track_id is not None}
+        for violation in found:
+            if violation.track_id is None:
+                continue
+            marks = proof_marks(violation, items, judged, failed)
+            await self._blobs.write(_marks_key(violation.id), _MARKS.dump_json(marks))
 
     # Areas a rule names but nobody drew are found by text on one still, then kept on the line
     # so the next recording of the same camera needs no call.
@@ -381,8 +447,9 @@ class Analysis:
         self, footage: Footage, specs: tuple[RuleSpec, ...], segmenter: Segmenter
     ) -> FootageEstimate:
         spans = await self.active_spans(footage)
+        tracked = tuple(tracking_spec(spec) for spec in specs)
         plan = self._planner.plan(
-            self._settings.strategy, PlanInput(footage, spans, specs, self._settings.fps)
+            self._settings.strategy, PlanInput(footage, spans, tracked, self._settings.fps)
         )
         frames = cached = 0
         charges: list[Charge] = []
@@ -403,31 +470,14 @@ class Analysis:
         return FootageEstimate(footage, frames, cached, usd)
 
 
-def _summary(
-    name: str,
-    violations: Sequence[Violation],
-    items: int,
-    numbers: dict[str, int],
-    skipped: Sequence[str],
-) -> str:
-    if not violations:
-        text = f"*{name}*: no violations in {items} items."
-    else:
-        listed = "\n".join(
-            f"{index}. {violation_line(v, numbers)}" for index, v in enumerate(violations, 1)
-        )
-        text = f"*{name}*: *{len(violations)} violations in {items} items:*\n{listed}"
-    if skipped:
-        text += "\nNot checked: " + "; ".join(skipped)
-    return text
+_MARKS = TypeAdapter(ProofMarks)
 
 
-def violation_line(violation: Violation, numbers: dict[str, int]) -> str:
-    number = numbers.get(violation.rule_id)
-    rule = f"rule {number}" if number else "a removed rule"
-    return (
-        f"{clock_time(violation.t)} · {item_label(violation.track_id)}: {violation.reason} ({rule})"
-    )
+def _footage_summary(footage: Footage, checked: Checked) -> str:
+    parts = [f"*{footage_name(footage)}* ({duration_text(footage.duration_s)})"]
+    parts += [rule_summary(outcome) for outcome in checked.outcomes]
+    parts += checked.skipped
+    return "\n\n".join(parts)
 
 
 def clip_buttons(footage: Footage, number: int, count: int) -> tuple[Button, ...]:
@@ -460,10 +510,9 @@ def _spans_key(footage_id: str) -> str:
     return f"footage/{footage_id}/active_spans.json"
 
 
+def _marks_key(violation_id: str) -> str:
+    return f"proof/{violation_id}.json"
+
+
 def _strings(value: JsonValue) -> tuple[str, ...]:
     return tuple(str(item) for item in value) if isinstance(value, list) else ()
-
-
-def _max_bytes(payload: JobPayload) -> int:
-    value = payload.get("max_media_bytes", 0)
-    return value if isinstance(value, int) else 0

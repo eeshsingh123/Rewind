@@ -8,6 +8,7 @@ from rewind.adapters.channels.whatsapp import WhatsAppChannel
 from rewind.adapters.jobs.in_process import InProcessJobRunner
 from rewind.adapters.models.muse import PRICES, MuseLanguageModel
 from rewind.adapters.storage.sql import SqlRepository
+from rewind.adapters.video.proof_clip import OpenCvProofClips
 from rewind.app.perception import Perception
 from rewind.app.settings import Settings
 from rewind.core.analysis import ANALYZE_JOB, INGEST_JOB, Analysis, AnalysisSettings
@@ -97,11 +98,12 @@ def build_chat(
         compiler_for=compiler_for,
         video=perception.video_tools,
         stills=perception.video_tools,
+        clips=OpenCvProofClips(),
         notifier=Outbox(channels),
         settings=AnalysisSettings(fps=settings.track_fps),
     )
     analyze = Analyze(
-        repository, repository, jobs, analysis, capabilities,
+        repository, repository, analysis,
         AnalyzeSettings(settings.confirm_above_usd, settings.workspace_daily_cap_usd),
     )  # fmt: skip
     findings = Findings(repository, analysis, capabilities)

@@ -33,6 +33,7 @@ from rewind.core.analysis import (
     INGEST_JOB,
     Analysis,
     AnalysisSettings,
+    Mark,
     naive_tracks,
 )
 from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, Ledger
@@ -61,6 +62,9 @@ CAPABILITIES = ChannelCapabilities(max_text_chars=4096, max_media_bytes=50_000_0
 
 
 class FakeVideo:
+    def __init__(self) -> None:
+        self.drawn: list[tuple[Mark, ...]] = []
+
     async def probe(self, source: Path) -> VideoInfo:
         return VideoInfo(duration_s=10.0, fps=25.0, width=1280, height=720, frame_count=250)
 
@@ -81,6 +85,12 @@ class FakeVideo:
     async def still(self, source: Path, t: float, destination: Path) -> None:
         destination.write_bytes(b"still")
 
+    async def make_clip(
+        self, source: Path, destination: Path, span: TimeSpan, marks: Sequence[Mark]
+    ) -> None:
+        self.drawn.append(tuple(marks))
+        destination.write_bytes(b"clip with boxes")
+
 
 class FakeActivity:
     async def sample(
@@ -89,30 +99,38 @@ class FakeActivity:
         return tuple(ActivitySample(t=i / 5, score=0.05 if i < 30 else 0.0) for i in range(1, 50))
 
 
-# Two cartons leave the view by t=3; only the second carries a label.
+# Two cartons ride left and leave the view at its left edge at t=3; only the second carries a
+# label. Video tracks the cartons; the label is looked for on stills.
 class FakeSam:
     model_version = "sam-test"
     max_frames = 1000
     max_prompt_objects = 16
+    max_tracked_objects = None
     min_billed_frames = 1
 
     def __init__(self) -> None:
         self.calls = 0
+        self.prompts: list[str] = []
 
     def estimate(self, request: SegmentRequest) -> tuple[Charge, ...]:
         return (_frames(len(request.frame_times)),)
 
     async def segment(self, request: SegmentRequest) -> Segmentation:
         self.calls += 1
-        concept = getattr(request.prompt, "text", "")
+        self.prompts.append(getattr(request.prompt, "text", ""))
+        concept = self.prompts[-1]
         found: list[Observation] = []
         for t in request.frame_times:
             if t > 3:
                 continue
+            x = max(0.0, 0.6 - 0.2 * t)
             if concept == "carton":
-                found += [_seen(request, concept, t, 1, 0.1), _seen(request, concept, t, 2, 0.5)]
+                found += [
+                    _seen(request, concept, t, 1, x, 0.1),
+                    _seen(request, concept, t, 2, x, 0.6),
+                ]
             if concept == "shipping label":
-                found.append(_seen(request, concept, t, 1, 0.55, size=0.1))
+                found.append(_seen(request, concept, t, 1, x + 0.1, 0.65, size=0.1))
         return Segmentation(tuple(found), (_frames(len(request.frame_times)),))
 
 
@@ -124,9 +142,10 @@ def _frames(count: int) -> Charge:
 
 
 def _seen(
-    request: SegmentRequest, concept: str, t: float, object_id: int, x: float, size: float = 0.3
-) -> Observation:
-    box = Box(x0=x, y0=0.3, x1=x + size, y1=0.3 + size)
+    request: SegmentRequest, concept: str, t: float, object_id: int, x: float, y: float,
+    size: float = 0.3,
+) -> Observation:  # fmt: skip
+    box = Box(x0=x, y0=y, x1=x + size, y1=y + size)
     return Observation(
         footage_id=request.footage_id, t=t, concept=concept, box=box, score=0.9,
         object_id=object_id,
@@ -171,6 +190,7 @@ class Setup:
     jobs: InProcessJobRunner
     line: Line
     rule: Rule
+    video: FakeVideo
 
 
 @pytest.fixture
@@ -193,7 +213,7 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
         ingest=Ingest(blobs, video, FakeActivity(), proxies, 2.0),
         planner=Planner(STRATEGIES), runner=PerceptionRunner(proxies, observations),
         observations=observations, segmenters=Segmenters(sam, ledger),
-        compiler_for=no_compiler, video=video, stills=video, notifier=notes,
+        compiler_for=no_compiler, video=video, stills=video, clips=video, notifier=notes,
         settings=AnalysisSettings(fps=2.0),
     )  # fmt: skip
     jobs = InProcessJobRunner()
@@ -211,7 +231,7 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
     source.write_bytes(b"video bytes")
     await blobs.write_file("footage/f1/belt.mp4", source)
     await analysis.handle_ingest(_payload(footage_id="f1", original_key="footage/f1/belt.mp4"))
-    yield Setup(repository, blobs, sam, notes, analysis, jobs, line, rule)
+    yield Setup(repository, blobs, sam, notes, analysis, jobs, line, rule, video)
     await repository.close()
 
 
@@ -237,47 +257,50 @@ def test_a_reused_object_id_after_a_gap_is_a_new_item() -> None:
     ]
 
 
-async def test_a_check_saves_violations_sends_a_clip_and_a_rerun_is_free(setup: Setup) -> None:
-    analyze = _payload(
-        footage_ids=["f1"], rule_ids=[setup.rule.id], job_id="job-1", max_media_bytes=50_000_000
-    )
+async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_free(
+    setup: Setup,
+) -> None:
+    analyze = _payload(footage_ids=["f1"], rule_ids=[setup.rule.id], job_id="job-1")
 
     await setup.analysis.handle_analyze(analyze)
     calls_after_first = setup.sam.calls
     await setup.analysis.handle_analyze({**analyze, "job_id": "job-2"})
+    [violation] = await setup.repository.violations("f1")
+    footage = await setup.repository.get_footage("f1")
+    assert footage is not None
+    clip = await setup.analysis.clip(footage, violation, 1, 1, 50_000_000)
 
-    violations = await setup.repository.violations("f1")
-    assert [(v.track_id, v.reason) for v in violations] == [
-        ("carton#1", "no shipping label when it left the view")
-    ]
-    summary, _, _ = setup.notes.sent[-2]
-    assert "carton 1: no shipping label when it left the view (rule 1)" in summary
-    assert "for $0.00" in summary
-    _, media, _ = setup.notes.sent[-1]
-    assert await setup.blobs.exists(media[0].blob_key)
+    assert violation.reason == "no shipping label when it left the view"
+    # Video follows the cartons; the label is looked for on one still, shared by both cartons.
+    assert setup.sam.prompts == ["carton", "shipping label"]
     assert setup.sam.calls == calls_after_first == 2
+    summary, _, buttons = setup.notes.sent[-1]
+    assert summary.startswith("Done in ")
+    assert "for $0.00" in summary
+    assert "Rule 1 · Every carton needs a label before it leaves." in summary
+    assert "❌ 1 of 2 cartons that left the view failed: the carton at 00:03." in summary
+    assert [b.label for b in buttons] == ["Show clips"]
+    assert clip.caption == ("Rule 1 · clip 1 of 1\nThe carton at 00:03: no shipping label.")
+    [marks] = setup.video.drawn
+    assert sorted((m.kind, m.tag) for m in marks) == [
+        ("flagged", "no shipping label"), ("passed", "")
+    ]  # fmt: skip
+    assert await setup.blobs.exists(clip.media[0].blob_key)
 
 
 async def test_analyze_asks_for_a_tap_above_the_threshold_and_starts_once(setup: Setup) -> None:
-    started: list[JobPayload] = []
-    jobs = InProcessJobRunner()
-
-    async def record(payload: JobPayload) -> None:
-        started.append(payload)
-
-    jobs.register(ANALYZE_JOB, record)
     analyze = Analyze(
-        setup.repository, setup.repository, jobs, setup.analysis, {"telegram": CAPABILITIES},
+        setup.repository, setup.repository, setup.analysis,
         AnalyzeSettings(confirm_above_usd=Decimal("0.001"), daily_cap_usd=Decimal(5)),
     )  # fmt: skip
     context = TurnContext("ws", ChatRef("telegram", "chat"), NOW)
 
     result = await analyze.tool().call(context, "{}")
     token = result.buttons[0].value.split(" ")[1]
-    await analyze.confirm(context, token)
+    first = await analyze.confirm(context, token)
     again = await analyze.confirm(context, token)
-    await jobs.drain()
 
     assert "NOT started yet" in result.text
-    assert len(started) == 1
+    assert not result.jobs
+    assert [job.kind for job in first.jobs + again.jobs] == [ANALYZE_JOB]
     assert again.text.startswith("That button has expired")
