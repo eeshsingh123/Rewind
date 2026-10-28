@@ -8,7 +8,8 @@ Last updated: 2026-10-28
 - S0 is done for the Meta models: SAM 3.1 and Muse Spark are both enabled, and D-6 now has the confirmed figures. Findings and recordings are in the uncommitted `spikes/s0/`; T2 copies the recordings it needs into `tests/recordings/`. The WhatsApp and Telegram checks are still open.
 - T0 Foundations is built on `t0-foundations`, with its PR open and waiting for the owner to merge. It has Contracts v1, the seven core ports (`Segmenter` and `LanguageModel` already shaped by S0: object prompts, the 50-frame floor, tools, images and effort), settings, `/health`, and `uv run poe check` (ruff, pyright, import-linter, pytest) running locally and in CI. Contract conventions are in D-13 (proposed).
 - `main` is protected: a PR is required (admins too) and force-push is blocked. The `check` status is required.
-- Next: after T0 merges, T1–T4 in parallel. Open: `Line`, `Footage` and `Rule` records for the `Repository` are not in Contracts v1, so the first track that stores them needs a contract PR first.
+- Contracts v1 also has the `Line`, `Footage` and `Rule` records and their `Repository` methods, so T2 (footage), T3 (rules) and T4 (lines) need no contract PR.
+- Next: after T0 merges, T1–T4 in parallel. T1 can keep pydantic out of Blender: `sim/render.py` runs under the project's Python and drives Blender as a subprocess; only the builders run inside Blender, and the ground truth is validated against the contracts on the project side.
 
 ## Blockers the owner sets up
 
@@ -42,4 +43,3 @@ Needed later:
 - Product name (the repo is `Rewind`; the name can still change).
 - Does the submission need a hosted URL, or are a demo video and the repo enough? Decides whether T8 needs a host (D-12).
 - The demo's spoken language for any voice output (dropped from P0; only relevant if added back).
-- T1: `sim/` imports `rewind.contracts`, but Blender runs its own Python (3.11 in 4.5 LTS), which has no pydantic. Either install pydantic into Blender's Python, or have the renderer write plain JSON and validate it against the contracts outside Blender.
