@@ -1,3 +1,4 @@
+from rewind.core.rules.compiler import CompiledRule, RuleCompileError, RuleCompiler, normalize
 from rewind.core.rules.engine import (
     CHECKPOINT_WINDOW_S,
     Scene,
@@ -13,15 +14,19 @@ __all__ = [
     "CHECKPOINT_WINDOW_S",
     "PREDICATES",
     "VIEW_EXIT",
+    "CompiledRule",
     "Evaluator",
     "FoundZone",
     "Item",
     "Keyframe",
+    "RuleCompileError",
+    "RuleCompiler",
     "RuleError",
     "Scene",
     "checkpoint_time",
     "evaluate",
     "evaluates",
     "find_zone",
+    "normalize",
     "zone_keys",
 ]
