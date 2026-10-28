@@ -18,7 +18,7 @@ Violation keys follow the semantics of the T3 rule engine: a checkpoint looks at
 
 | Fault | Station | Rendered as | Violation key | Rule sentence |
 |---|---|---|---|---|
-| `flap_up` | folder | one flap (`open_flap` prop) stays open, the other three fold | `flaps_before_tape` (if the carton leaves the view) | The carton must be closed with all 4 flaps down before tape. |
+| `flap_up` | folder | one side flap (`open_flap`: front or back, the ones facing the camera) stays up, the other three fold | `flaps_before_tape` (if the carton leaves the view) | The carton must be closed with all 4 flaps down before tape. |
 | `missing_label` | labeller | no shipping label on the front face | `label_at_sealing`, `shipping_label_qr_at_end` | Every carton needs a label when it enters sealing. / Every carton needs a shipping label and a QR code at the end of the footage. |
 | `missing_qr` | labeller | the label is printed without its QR code | `shipping_label_qr_at_end` | Every carton needs a shipping label and a QR code at the end of the footage. |
 | `missing_tape` | taper | no tape strip along the top | `tape_on_exit` (if the carton leaves the view) | Every carton must have tape before it leaves the view. |

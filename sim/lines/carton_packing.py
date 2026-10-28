@@ -8,7 +8,9 @@ TAPE_COLOURS = {
     "clear": (0.75, 0.68, 0.52),
     "white": (0.85, 0.85, 0.82),
 }
-FLAPS = ("front", "back", "left", "right")
+# Only these flaps can stay up: the end flaps (left, right) hinge across the belt, so the camera
+# sees them edge-on and an open one would be invisible in the footage.
+OPEN_FLAPS = ("front", "back")
 
 
 def judge(item: ItemTimeline) -> tuple[str, ...]:
@@ -30,7 +32,7 @@ def style(rng: random.Random) -> dict[str, PropValue]:
         "cardboard_tint": round(rng.uniform(0.8, 1.1), 3),
         "tape_colour": rng.choice(sorted(TAPE_COLOURS)),
         # Which flap stays up if the folder fails on this carton.
-        "open_flap": rng.choice(FLAPS),
+        "open_flap": rng.choice(OPEN_FLAPS),
     }
 
 
