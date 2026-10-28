@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 
+import cv2
 import pytest
 
 from rewind.adapters.storage.local_disk import LocalDiskBlobStore
@@ -239,29 +240,27 @@ def test_an_unknown_strategy_is_refused_by_name() -> None:
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
-async def test_the_proxy_has_exactly_one_frame_per_time_map_entry(tmp_path: Path) -> None:
+async def test_each_proxy_frame_is_the_source_frame_its_time_map_names(tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=640x360:rate=25:duration=6",
-            str(source),
-        ],
-        check=True,
-    )
+    # Frame n of the source has luma 16 + 3n, so a decoded proxy frame says which frame it is.
+    pattern = "nullsrc=size=64x64:rate=12:duration=6,geq=lum='16+3*N':cb=128:cr=128"
+    command = ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", pattern, "-crf", "0", str(source)]
+    subprocess.run(command, check=True)
     video = FfmpegVideoTools()
     spans = (TimeSpan(start=0.5, end=1.9), TimeSpan(start=4.0, end=5.0))
 
     frame_times = await video.make_proxy(
         source, tmp_path / "proxy.mp4", spans, fps=5, max_height=720
     )
-    info = await video.probe(tmp_path / "proxy.mp4")
 
-    assert frame_times == (0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 4.0, 4.2, 4.4, 4.6, 4.8, 5.0)
-    assert info.frame_count == len(frame_times)
-    assert (info.width, info.height, info.fps) == (640, 360, 5)
+    capture = cv2.VideoCapture(str(tmp_path / "proxy.mp4"))
+    shown: list[float] = []
+    while (frame := capture.read())[0]:
+        # Decoding maps video luma 16..235 to 0..255; undo that to read the frame number back.
+        luma = float(cv2.cvtColor(frame[1], cv2.COLOR_BGR2GRAY).mean()) * 219 / 255 + 16
+        shown.append(round((luma - 16) / 3) / 12)
+    capture.release()
+    # A 12 fps source puts no frame on the 5 fps grid, so each step takes the next frame after it.
+    expected = [math.ceil(round(g / 5 * 12, 6)) / 12 for g in (*range(3, 10), *range(20, 26))]
+    assert list(frame_times) == pytest.approx(expected, abs=1e-3)
+    assert shown == pytest.approx(frame_times, abs=1e-3)

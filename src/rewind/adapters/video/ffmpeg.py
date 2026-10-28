@@ -53,11 +53,14 @@ class FfmpegVideoTools:
     ) -> tuple[float, ...]:
         if not spans:
             raise VideoToolsError("a proxy needs at least one span")
-        selected = "+".join(f"between(t,{span.start:.3f},{span.end:.3f})" for span in spans)
+        in_spans = "+".join(f"between(t,{span.start:.3f},{span.end:.3f})" for span in spans)
+        # Keeps the first source frame at or after each 1/fps step. The fps filter is not used:
+        # it stamps grid times on frames up to half a step away, so the time map would be wrong.
+        new_step = f"gt(floor(t*{fps:g}+1e-6),floor(prev_t*{fps:g}+1e-6))"
+        selected = f"({in_spans})*(isnan(prev_t)+{new_step})"
         # showinfo sits after select and before setpts, so it logs each kept frame's footage time.
         filters = (
-            f"fps={fps:g},select='{selected}',showinfo,"
-            f"setpts=N/({fps:g}*TB),scale=-2:'min({max_height},ih)'"
+            f"select='{selected}',showinfo,setpts=N/({fps:g}*TB),scale=-2:'min({max_height},ih)'"
         )
         out = await _run(
             self._ffmpeg,
