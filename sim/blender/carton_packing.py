@@ -120,7 +120,13 @@ def _tape(scene, item, root, length, height):
     # Anchored at the leading (+x) end, so it grows backwards as the carton passes the roller.
     anchor = empty(f"{item['id']}_tape_anchor", (length / 2 + 0.002, 0, height + 0.012))
     anchor.parent = root
-    box(f"{item['id']}_tape", (length + 0.004, TAPE_WIDTH, 0.0015), (-length / 2, 0, 0), tape_material, anchor)
+    box(
+        f"{item['id']}_tape",
+        (length + 0.004, TAPE_WIDTH, 0.0015),
+        (-length / 2, 0, 0),
+        tape_material,
+        anchor,
+    )
     pass_s = length / scene.spec["belt"]["speed"]
     if applied - pass_s / 2 <= 0:
         return
@@ -153,11 +159,23 @@ def _folder(scene, station, top):
     x = (station["start"] + station["end"]) / 2
     height = scene.spec["item_size"][2]
     # Machines hang from columns behind the belt, so nothing stands between camera and cartons.
-    box("folder_column", (0.08, 0.08, height + 0.75), (x, width / 2 + 0.12, (top + height + 0.4) / 2 + 0.2), painted)
+    box(
+        "folder_column",
+        (0.08, 0.08, height + 0.75),
+        (x, width / 2 + 0.12, (top + height + 0.4) / 2 + 0.2),
+        painted,
+    )
     for side in (-1, 1):
-        rail = cylinder(f"folder_rail_{side}", 0.008, length + 0.3, (x, side * 0.05, top + height + 0.05), steel)
+        rail = cylinder(
+            f"folder_rail_{side}", 0.008, length + 0.3, (x, side * 0.05, top + height + 0.05), steel
+        )
         rail.rotation_euler = (0, radians(90), radians(side * 6))
-    box("folder_beam", (0.08, width / 2 + 0.16, 0.06), (x, width / 4 + 0.06, top + height + 0.33), painted)
+    box(
+        "folder_beam",
+        (0.08, width / 2 + 0.16, 0.06),
+        (x, width / 4 + 0.06, top + height + 0.33),
+        painted,
+    )
 
 
 def _labeller(scene, station, top):
@@ -175,7 +193,9 @@ def _labeller(scene, station, top):
             pad.location.y = y
             pad.keyframe_insert("location", index=1, frame=scene.frame(at))
     box("labeller_stand", (0.08, 0.08, top - 0.35), (x, -width / 2 - 0.22, (top - 0.35) / 2), steel)
-    box("labeller_arm", (0.04, 0.04, height * 0.5 + 0.12), (x, -width / 2 - 0.16, top - 0.02), steel)
+    box(
+        "labeller_arm", (0.04, 0.04, height * 0.5 + 0.12), (x, -width / 2 - 0.16, top - 0.02), steel
+    )
 
 
 def _taper(scene, station, top):
@@ -184,9 +204,26 @@ def _taper(scene, station, top):
     x = (station["start"] + station["end"]) / 2
     height = scene.spec["item_size"][2]
     span = station["end"] - station["start"]
-    box("taper_column", (0.1, 0.1, height + 0.8), (x, width / 2 + 0.14, (top + height + 0.4) / 2 + 0.2), painted)
+    box(
+        "taper_column",
+        (0.1, 0.1, height + 0.8),
+        (x, width / 2 + 0.14, (top + height + 0.4) / 2 + 0.2),
+        painted,
+    )
     box("taper_head", (span, 0.14, 0.12), (x, 0, top + height + 0.16), painted, bevel=0.01)
-    roll = cylinder("tape_roll", 0.08, TAPE_WIDTH + 0.01, (x + 0.05, 0, top + height + 0.3), scene.flat("tape_roll", (0.55, 0.36, 0.16), roughness=0.3))
+    roll = cylinder(
+        "tape_roll",
+        0.08,
+        TAPE_WIDTH + 0.01,
+        (x + 0.05, 0, top + height + 0.3),
+        scene.flat("tape_roll", (0.55, 0.36, 0.16), roughness=0.3),
+    )
     roll.rotation_euler = (radians(90), 0, 0)
-    core = cylinder("tape_core", 0.035, TAPE_WIDTH + 0.012, (x + 0.05, 0, top + height + 0.3), scene.flat("tape_core", (0.7, 0.6, 0.45)))
+    core = cylinder(
+        "tape_core",
+        0.035,
+        TAPE_WIDTH + 0.012,
+        (x + 0.05, 0, top + height + 0.3),
+        scene.flat("tape_core", (0.7, 0.6, 0.45)),
+    )
     core.rotation_euler = (radians(90), 0, 0)

@@ -110,7 +110,9 @@ def ground_truth(plan: ScenePlan) -> GroundTruth:
         for item in plan.items
     )
     events = tuple(
-        ScenarioEvent(kind="jam", span=TimeSpan(start=jam.start, end=min(jam.end, config.duration_s)))
+        ScenarioEvent(
+            kind="jam", span=TimeSpan(start=jam.start, end=min(jam.end, config.duration_s))
+        )
         for jam in plan.belt.jams
         if jam.start < config.duration_s
     )

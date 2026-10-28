@@ -7,15 +7,14 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import carton_packing  # noqa: E402
-import jar_line  # noqa: E402
-from common import (  # noqa: E402
+import carton_packing
+import jar_line
+from common import (
     Scene,
     box,
     cylinder,
     import_prop,
     kelvin_tint,
-    key_x,
     look_at_rotation,
 )
 
@@ -127,9 +126,7 @@ def _belt(scene: Scene) -> None:
     mapping = next(n for n in rubber.node_tree.nodes if n.type == "MAPPING")
     for t, distance in belt["keys"]:
         mapping.inputs["Location"].default_value[0] = -distance
-        mapping.inputs["Location"].keyframe_insert(
-            "default_value", index=0, frame=scene.frame(t)
-        )
+        mapping.inputs["Location"].keyframe_insert("default_value", index=0, frame=scene.frame(t))
     steel = scene.textured("steel", 1.0, metallic=1.0)
     painted = scene.textured("painted", 1.0, tuple(scene.spec["frame_colour"]), grey=True)
     for side in (-1, 1):
@@ -139,7 +136,9 @@ def _belt(scene: Scene) -> None:
             x = -BELT_LENGTH / 2 + 0.3 + index * (BELT_LENGTH - 0.6) / 7
             box(f"leg_{side}_{index}", (0.05, 0.05, top - 0.1), (x, y, (top - 0.1) / 2), painted)
     for end in (-1, 1):
-        roller = cylinder(f"roller_{end}", 0.04, width + 0.04, (end * BELT_LENGTH / 2, 0, top - 0.04), steel)
+        roller = cylinder(
+            f"roller_{end}", 0.04, width + 0.04, (end * BELT_LENGTH / 2, 0, top - 0.04), steel
+        )
         roller.rotation_euler = (1.5708, 0, 0)
 
 
@@ -151,7 +150,9 @@ def _background(scene: Scene) -> None:
         import_prop(assets["prop_SM_BulkStorageRack_A03_01"], (x, 2.6, 0), rng.uniform(-0.05, 0.05))
         for slot in range(3):
             if rng.random() < 0.75:
-                prop = rng.choice(("Cardbox_A1", "Cardbox_B1", "Cardbox_C1", "SM_Crate_A01_Blue_01"))
+                prop = rng.choice(
+                    ("Cardbox_A1", "Cardbox_B1", "Cardbox_C1", "SM_Crate_A01_Blue_01")
+                )
                 location = (x - 0.75 + slot * 0.75, 2.6 + rng.uniform(-0.1, 0.1), 0.12)
                 import_prop(assets[f"prop_{prop}"], location, rng.uniform(-0.3, 0.3), 0.6)
     for index in range(2):
@@ -160,7 +161,9 @@ def _background(scene: Scene) -> None:
         import_prop(assets["prop_Pallet_A1"], pallet, rng.uniform(-0.2, 0.2))
         for level in range(rng.randint(1, 3)):
             prop = rng.choice(("Cardbox_A1", "Cardbox_B1"))
-            import_prop(assets[f"prop_{prop}"], (x, pallet[1], 0.15 + level * 0.5), rng.uniform(-0.1, 0.1))
+            import_prop(
+                assets[f"prop_{prop}"], (x, pallet[1], 0.15 + level * 0.5), rng.uniform(-0.1, 0.1)
+            )
 
 
 if __name__ == "__main__":

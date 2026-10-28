@@ -53,10 +53,17 @@ def _jar(scene: Scene, item: dict, top: float) -> None:
         f"contents_{style['contents']}", CONTENTS[style["contents"]], roughness=0.25, coat=1.0
     )
     body = cylinder(
-        f"{item['id']}_body", radius * 0.94, body_height * 0.92, (0, 0, body_height * 0.47), contents, root
+        f"{item['id']}_body",
+        radius * 0.94,
+        body_height * 0.92,
+        (0, 0, body_height * 0.47),
+        contents,
+        root,
     )
     glass = scene.flat("glass", (0.6, 0.7, 0.68), roughness=0.02, coat=1.0, alpha=0.1)
-    shell = cylinder(f"{item['id']}_glass", radius, body_height, (0, 0, body_height / 2), glass, root)
+    shell = cylinder(
+        f"{item['id']}_glass", radius, body_height, (0, 0, body_height / 2), glass, root
+    )
     for target in (body, shell):
         bevel = target.modifiers.new("bevel", "BEVEL")
         bevel.width = 0.008
@@ -100,7 +107,9 @@ def _guides(scene: Scene, top: float) -> None:
     steel = scene.textured("steel", 1.0, metallic=1.0)
     width = scene.spec["belt"]["width"]
     for side in (-1, 1):
-        guide = cylinder(f"guide_{side}", 0.006, 7.0, (0, side * (width / 2 - 0.03), top + 0.07), steel)
+        guide = cylinder(
+            f"guide_{side}", 0.006, 7.0, (0, side * (width / 2 - 0.03), top + 0.07), steel
+        )
         guide.rotation_euler = (0, radians(90), 0)
 
 
@@ -111,8 +120,20 @@ def _capper(scene: Scene, station: dict, top: float) -> None:
     x = (station["start"] + station["end"]) / 2
     # Cantilevered from a column behind the belt, so nothing stands between camera and jars.
     box("capper_column", (0.1, 0.1, 0.75), (x, width / 2 + 0.12, top + 0.25), painted, bevel=0.01)
-    box("capper_arm", (0.12, width / 2 + 0.16, 0.08), (x, width / 4 + 0.06, top + 0.46), painted, bevel=0.01)
-    box("capper_hopper", (0.18, 0.14, 0.16), (x - 0.02, width / 2 + 0.12, top + 0.68), steel, bevel=0.01)
+    box(
+        "capper_arm",
+        (0.12, width / 2 + 0.16, 0.08),
+        (x, width / 4 + 0.06, top + 0.46),
+        painted,
+        bevel=0.01,
+    )
+    box(
+        "capper_hopper",
+        (0.18, 0.14, 0.16),
+        (x - 0.02, width / 2 + 0.12, top + 0.68),
+        steel,
+        bevel=0.01,
+    )
     head = cylinder("capper_head", 0.05, 0.12, (x, 0, top + 0.3), steel)
     rest, down = top + 0.3, top + 0.215
     for t in station["times"]:

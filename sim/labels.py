@@ -20,7 +20,9 @@ def jar_label(path: Path, design: int, contents: str) -> Path:
     draw.rectangle((0, height - 60, width, height), fill=band)
     # The front of the jar shows the middle of the label, so the text sits there.
     middle = width // 2
-    draw.text((middle, 120), JAR_BRANDS[design % len(JAR_BRANDS)], fill=ink, font=_font(64), anchor="mm")
+    draw.text(
+        (middle, 120), JAR_BRANDS[design % len(JAR_BRANDS)], fill=ink, font=_font(64), anchor="mm"
+    )
     draw.text((middle, 200), contents.upper(), fill=ink, font=_font(40), anchor="mm")
     draw.text((middle, 255), "NET WT 340 g", fill=ink, font=_font(24), anchor="mm")
     image.save(path)

@@ -235,10 +235,14 @@ def look_at_rotation(position, target):
 
 def kelvin_tint(warmth: float):
     # -1 cool white, +1 warm white.
-    return (1.0, 0.93 - 0.05 * warmth, 0.86 - 0.12 * warmth) if warmth > 0 else (
-        0.92 + 0.08 * (1 + warmth),
-        0.95,
-        1.0,
+    return (
+        (1.0, 0.93 - 0.05 * warmth, 0.86 - 0.12 * warmth)
+        if warmth > 0
+        else (
+            0.92 + 0.08 * (1 + warmth),
+            0.95,
+            1.0,
+        )
     )
 
 

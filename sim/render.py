@@ -48,7 +48,9 @@ def main() -> None:
     print(json.dumps({"out": str(out.resolve()), "seconds": timings}, indent=2))
 
 
-def render(plan: ScenePlan, out: Path, settings: SimSettings, still: float | None) -> dict[str, float]:
+def render(
+    plan: ScenePlan, out: Path, settings: SimSettings, still: float | None
+) -> dict[str, float]:
     timings: dict[str, float] = {}
     started = time.monotonic()
     truth = ground_truth(plan)
@@ -170,8 +172,8 @@ def degrade(plan: ScenePlan, clean: Path, output: Path) -> None:
     subprocess.run(
         [
             "ffmpeg", "-y", "-loglevel", "error", "-i", str(clean), "-vf", filters,
-            "-c:v", "libx264", "-preset", "medium", "-crf", str(look.crf), "-g", str(config.fps * 2),
-            "-pix_fmt", "yuv420p", "-an", str(output),
+            "-c:v", "libx264", "-preset", "medium", "-crf", str(look.crf),
+            "-g", str(config.fps * 2), "-pix_fmt", "yuv420p", "-an", str(output),
         ],
         check=True,
     )  # fmt: skip
