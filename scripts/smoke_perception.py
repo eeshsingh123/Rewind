@@ -12,10 +12,11 @@ from pathlib import Path
 
 import httpx
 
+from rewind.adapters.storage.sql import SqlRepository
 from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
 from rewind.contracts import Box, Entity, ExitsView, RuleSpec
-from rewind.core.budget import BudgetScope
+from rewind.core.budget import EPOCH, BudgetScope
 from rewind.core.perception import PlanInput
 from rewind.core.ports import ObjectPrompt, ObjectPrompts, SegmentRequest
 
@@ -89,8 +90,10 @@ async def main() -> None:
     )
     transport = RecordingTransport(args.record_dir)
     timeout = httpx.Timeout(600, connect=30)
+    repository = SqlRepository.from_url(settings.database_url_or_default)
+    await repository.create_tables()
     async with httpx.AsyncClient(transport=transport, timeout=timeout) as client:
-        perception = build_perception(settings, client)
+        perception = build_perception(settings, client, repository)
         original_key = f"footage/{args.clip.name}"
         await perception.blobs.write_file(original_key, args.clip)
         ingested = await perception.ingest.ingest("smoke", "line-smoke", original_key)
@@ -113,7 +116,7 @@ async def main() -> None:
             started = datetime.now(UTC)
             scope = BudgetScope(workspace_id="smoke", job_id=f"run-{run}-{started:%H%M%S}")
             result = await perception.runner.run(footage, plan, perception.video(scope))
-            spent = await perception.cost_log.spent_usd(started, "smoke")
+            spent = await repository.spent_usd(started, "smoke")
             per_concept = {
                 c: sum(o.concept == c for o in result.observations) for c in args.concept
             }
@@ -150,10 +153,9 @@ async def main() -> None:
                 f"first scores {scores[:5]}, {result.charges}"
             )
 
-    entries = perception.cost_log.entries()
-    ledger_frames = sum(e.quantity for e in entries if e.unit == "video_frame")
-    ledger_usd = sum((e.usd for e in entries), Decimal(0))
-    print(f"ledger (all smoke runs on this data root): {ledger_frames} frames, ${ledger_usd}")
+    ledger_usd = await repository.spent_usd(EPOCH, "smoke")
+    await repository.close()
+    print(f"ledger (all smoke runs on this data root): ${ledger_usd}")
     print(f"provider-reported frames this process: {transport.reported_frames}")
 
 
