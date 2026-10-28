@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "https://api.meta.ai/v1/files",
+    "json": null
+  },
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "x-request-id": "e9bac2c6-756b-4235-af88-e1668630b9d1",
+    "date": "Wed, 28 Oct 2026 15:17:31 GMT"
+  },
+  "body": {
+    "id": "file-4929574040607421",
+    "bytes": 10418,
+    "created_at": 1793200649,
+    "expires_at": 1793287049,
+    "filename": "2fps-8eb9a1fe748b.mp4",
+    "object": "file",
+    "purpose": "user_data",
+    "status": "uploaded"
+  }
+}

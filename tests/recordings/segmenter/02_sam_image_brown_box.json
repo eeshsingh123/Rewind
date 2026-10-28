@@ -1,0 +1,92 @@
+{
+  "note": "SAM 3.1 image, concept 'brown box', JPEG frame at t=3s as data URL, non-streaming, confidence on, one_bit masks",
+  "request": {
+    "method": "POST",
+    "url": "https://api.meta.ai/v1/responses",
+    "json": {
+      "model": "sam-3.1",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "brown box"
+            },
+            {
+              "type": "input_image",
+              "image_url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABA...<12115 chars elided>"
+            }
+          ]
+        }
+      ],
+      "metadata": {
+        "include_confidence": "true",
+        "mask_encoding": "one_bit"
+      }
+    }
+  },
+  "status": 200,
+  "response_headers": {
+    "content-type": "application/json",
+    "x-ratelimit-limit-requests": "3000",
+    "x-ratelimit-remaining-requests": "2999",
+    "x-request-id": "c63a5e56-ab15-43ae-adda-9cc349e4b13c",
+    "date": "Wed, 28 Oct 2026 14:00:29 GMT"
+  },
+  "elapsed_s": 3.8,
+  "body": {
+    "metadata": {
+      "mask_encoding": "one_bit",
+      "include_confidence": "true"
+    },
+    "top_logprobs": 0,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "service_tier": "auto",
+    "model": "sam-3.1",
+    "background": false,
+    "tools": [],
+    "tool_choice": "auto",
+    "truncation": "disabled",
+    "id": "resp_6ae1fffb19962eb5685c40fb",
+    "object": "response",
+    "status": "completed",
+    "created_at": 1793196027.0,
+    "completed_at": 1793196027.0,
+    "error": null,
+    "incomplete_details": null,
+    "output": [
+      {
+        "type": "message",
+        "id": "msg_c63a5e56-ab15-43ae-adda-9cc349e4b13c",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "<0f>0<|box;x1=840;y1=284;x2=1039;y2=433;w=1280;h=720;c=0.5114504098892212|><|mask;x=0;y=0;c=0.5114504098892212;data=150,200,!!!!!6H3fk-WT2ons5hrIG7.'*iS!w|>,1<|box;x1=280;y1=284;x2=479;y2=433;w=1280;h=720;c=0.5151515007019043|><|mask;x=0;y=0;c=0.5151515007019043;data=150,200,!!!!!2LD'/Y%KbppsoOOYI][%|>\n",
+            "annotations": [],
+            "logprobs": []
+          }
+        ],
+        "status": "completed"
+      }
+    ],
+    "instructions": null,
+    "usage": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "cached_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 0,
+      "images_processed": 1
+    },
+    "parallel_tool_calls": true,
+    "store": true
+  }
+}
