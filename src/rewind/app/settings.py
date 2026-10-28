@@ -12,3 +12,4 @@ class Settings(BaseSettings):
     # Optional so the app starts without it; adapters that call Meta fail at wiring instead.
     meta_api_key: SecretStr | None = Field(default=None, validation_alias="META_API_KEY")
     data_root: Path = Path("data")
+    muse_model: str = "muse-spark-1.3-contributor"
