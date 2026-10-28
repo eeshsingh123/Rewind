@@ -83,6 +83,7 @@ class FakeActivity:
 class FakeSegmenter:
     model_version = "sam-3.1"
     max_prompt_objects = 16
+    max_tracked_objects: int | None = None
     min_billed_frames = 50
 
     def __init__(self, max_frames: int = 15_000) -> None:
@@ -220,6 +221,63 @@ async def test_windows_longer_than_the_frame_limit_are_split_into_requests(
     assert all(len(r.frame_times) <= 60 for r in segmenter.requests)
     covered = {t for r in segmenter.requests if r.prompt.text == "glass jar" for t in r.frame_times}  # type: ignore[union-attr]
     assert len(covered) == 162
+
+
+# Like SAM video: ids go to objects in order of appearance, and once `limit` objects were found,
+# the request finds no new ones. Objects stand still at their own x and live from start to end.
+class FullingSegmenter(FakeSegmenter):
+    max_tracked_objects = 3
+    lifetimes = ((0.0, 1.5), (1.0, 10.0), (2.0, 4.0), (4.5, 10.0), (6.0, 10.0))
+
+    async def segment(self, request: SegmentRequest) -> Segmentation:
+        self.requests.append(request)
+        ids: dict[int, int] = {}
+        found: list[Observation] = []
+        for t in request.frame_times:
+            for index, (start, end) in enumerate(self.lifetimes):
+                if not start <= t <= end:
+                    continue
+                if index not in ids and len(ids) < 3:
+                    ids[index] = 10 + len(ids)
+                if index in ids:
+                    found.append(
+                        Observation(
+                            footage_id=request.footage_id, t=t,
+                            concept=request.prompt.text,  # type: ignore[union-attr]
+                            box=Box(x0=index / 5, y0=0.4, x1=index / 5 + 0.1, y1=0.6),
+                            score=0.9, object_id=ids[index],
+                        )
+                    )  # fmt: skip
+        return Segmentation(observations=tuple(found), charges=self.estimate(request))
+
+
+async def test_a_request_that_runs_out_of_slots_is_continued_with_the_same_ids(
+    blobs: LocalDiskBlobStore,
+) -> None:
+    video = FakeVideo()
+    proxies = ProxyMaker(blobs, video, max_height=720)
+    runner = PerceptionRunner(proxies, ParquetObservationStore(blobs))
+    segmenter = FullingSegmenter()
+    await blobs.write("footage/line.mp4", b"original")
+    ingested = await Ingest(blobs, video, FakeActivity(), proxies, 2.0).ingest(
+        "f1", "line1", "footage/line.mp4"
+    )
+    plan = Planner(STRATEGIES).plan(
+        "dense_track",
+        PlanInput(ingested.footage, (TimeSpan(start=0, end=10),), (JAR_RULE,), fps=2.0),
+    )
+
+    result = await runner.run(ingested.footage, plan, segmenter)
+
+    jars = [o for o in result.observations if o.concept == "glass jar"]
+    assert len({(o.t, o.box.x0) for o in jars}) == len(jars), "a shared frame is kept once"
+    ids_by_object = {
+        round(x * 5): {o.object_id for o in jars if o.box.x0 == x} for x in {o.box.x0 for o in jars}
+    }
+    assert ids_by_object == {0: {0}, 1: {1}, 2: {2}, 3: {3}, 4: {4}}
+    starts = [r.frame_times[0] for r in segmenter.requests if r.prompt.text == "glass jar"]  # type: ignore[union-attr]
+    assert starts == [0.0, 2.0, 4.5, 6.0]
+    assert max(o.t for o in jars if o.box.x0 == 0.8) == 10.0
 
 
 def test_idle_skip_pads_active_samples_and_bridges_short_gaps() -> None:

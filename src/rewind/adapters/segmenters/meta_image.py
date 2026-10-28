@@ -29,6 +29,11 @@ class MetaImageSegmenter:
     def max_prompt_objects(self) -> int:
         return 16
 
+    # One image is not tracked: a stock frame returned 21 labels in one call.
+    @property
+    def max_tracked_objects(self) -> int | None:
+        return None
+
     @property
     def min_billed_frames(self) -> int:
         return 1
