@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -90,10 +91,14 @@ class TelegramChannel:
     async def send(self, reply: Reply) -> None:
         markup = _keyboard(reply.buttons[: CAPABILITIES.max_buttons])
         text = _html(reply.text)
-        for media in reply.media:
+        for index, media in enumerate(reply.media):
             path = await self._blobs.local_path(media.blob_key)
-            fields = {"chat_id": reply.chat_id, "caption": _html(media.caption or ""),
-                      "parse_mode": "HTML"}  # fmt: skip
+            caption = _html(media.caption or "")
+            fields: dict[str, Any] = {"chat_id": reply.chat_id, "caption": caption,
+                                      "parse_mode": "HTML"}  # fmt: skip
+            # With no text after it, the last video carries the buttons: one message, not two.
+            if markup is not None and not text and index == len(reply.media) - 1:
+                fields["reply_markup"] = json.dumps(markup)
             await self._call_with_file("sendVideo", fields, "video", path)
         if text:
             await self._call("sendMessage", _text_body(reply.chat_id, text, markup))

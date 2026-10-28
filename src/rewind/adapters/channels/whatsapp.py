@@ -106,8 +106,14 @@ class WhatsAppChannel:
         return CAPABILITIES
 
     async def send(self, reply: Reply) -> None:
+        # One video with buttons and no other text goes as one message: the video is its header.
+        joined = len(reply.media) == 1 and bool(reply.buttons) and not reply.text
+        header: dict[str, Any] | None = None
         for media in reply.media:
             media_id = await self._upload(await self._blobs.local_path(media.blob_key))
+            if joined:
+                header = {"type": "video", "video": {"id": media_id}}
+                continue
             video: dict[str, Any] = {"id": media_id}
             if media.caption:
                 video["caption"] = media.caption
@@ -117,11 +123,14 @@ class WhatsAppChannel:
                 {"type": "reply", "reply": {"id": b.value, "title": b.label[:_BUTTON_TITLE_CHARS]}}
                 for b in reply.buttons[: CAPABILITIES.max_buttons]
             ]
-            interactive = {
+            body = reply.text or (reply.media[0].caption if joined else None) or "…"
+            interactive: dict[str, Any] = {
                 "type": "button",
-                "body": {"text": reply.text[:_BUTTON_BODY_CHARS]},
+                "body": {"text": body[:_BUTTON_BODY_CHARS]},
                 "action": {"buttons": buttons},
             }
+            if header is not None:
+                interactive["header"] = header
             await self._message(reply.chat_id, {"type": "interactive", "interactive": interactive})
         elif reply.text:
             text = {"body": reply.text[: CAPABILITIES.max_text_chars]}

@@ -7,7 +7,7 @@ import pytest
 
 from rewind.adapters.channels.telegram import TelegramChannel, parse_update
 from rewind.adapters.storage.local_disk import LocalDiskBlobStore
-from rewind.contracts import Attachment, Button, Reply
+from rewind.contracts import Attachment, Button, Reply, ReplyMedia
 from rewind.core.conversation import AttachmentTooLargeError
 
 pytestmark = pytest.mark.anyio
@@ -95,3 +95,27 @@ async def test_a_video_over_20_mb_is_refused_before_any_call(tmp_path: Path) -> 
         await _channel(sent).fetch_attachment(big, tmp_path / "clip.mp4")
 
     assert sent == []
+
+
+async def test_a_clip_with_a_button_goes_as_one_message(tmp_path: Path) -> None:
+    sent: list[tuple[str, bytes]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append((request.url.path.rsplit("/", 1)[-1], request.read()))
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    blobs = LocalDiskBlobStore(tmp_path, "", b"key")
+    await blobs.write("proof/v1.mp4", b"video")
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    reply = Reply(
+        channel="telegram", chat_id="42", text="",
+        media=(ReplyMedia(kind="video", blob_key="proof/v1.mp4", caption="Rule 1 · clip 1 of 3"),),
+        buttons=(Button(label="Next clip", value="/clip f1 2"),),
+    )  # fmt: skip
+
+    await TelegramChannel(client, "123:token", blobs).send(reply)
+
+    [(method, body)] = sent
+    assert method == "sendVideo"
+    assert b"Rule 1 \xc2\xb7 clip 1 of 3" in body
+    assert b'"callback_data": "/clip f1 2"' in body
