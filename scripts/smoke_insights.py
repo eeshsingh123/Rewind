@@ -6,6 +6,7 @@
 
 import argparse
 import asyncio
+import hashlib
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -94,13 +95,16 @@ async def main() -> None:
             settings=AnalysisSettings(fps=settings.track_fps),
         )  # fmt: skip
         now = datetime.now(UTC)
-        line = Line(id="smoke-line", workspace_id="smoke", name="Smoke line", created_at=now)
+        # One line per clip, and one id per rule text, so clips never count as each other's history.
+        line_id = f"smoke-line-{args.clip.parent.name}"
+        line = Line(id=line_id, workspace_id="smoke", name="Smoke line", created_at=now)
         await repository.save_line(line)
         rule_ids: list[str] = []
-        for index, text in enumerate(args.rule, 1):
+        for text in args.rule:
             compiled = await RuleCompiler(model_for("smoke"), blobs).compile(text)
             rule = Rule(
-                id=f"smoke-rule-{index}", line_id=line.id, text=text,
+                id=f"smoke-rule-{hashlib.sha256(normalize(text).encode()).hexdigest()[:12]}",
+                line_id=line.id, text=text,
                 normalized_text=normalize(text), spec=compiled.spec, created_at=now,
             )  # fmt: skip
             await repository.save_rule(rule)

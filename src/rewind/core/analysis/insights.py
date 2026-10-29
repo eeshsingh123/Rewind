@@ -42,7 +42,7 @@ from rewind.core.rules import at_border
 logger = logging.getLogger(__name__)
 
 # Bump when a prompt or the fact sheet changes, so cached answers are not reused.
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 MAX_INSIGHTS = 3
 MAX_TEXT_CHARS = 240
 MAX_ANSWER_CHARS = 600
@@ -93,6 +93,9 @@ Hard rules:
 - Every number and time you write must appear in a fact you cite, written the same way \
 (times look like 00:14). Never count or add up yourself: if the facts do not hold the number, \
 the question cannot be answered.
+- "When" and "how often" questions about failures are answered from the failure facts: \
+the first one listed is when it started in this recording, and the rule's count is how \
+often. Say that it is this recording only.
 - The facts cover only what the line's rules check: the items, their parts, stops and pace. \
 If the question needs anything else (why something happened, who did it, something no rule \
 looks for, a time outside the recording, another recording), set answerable to false, say in \

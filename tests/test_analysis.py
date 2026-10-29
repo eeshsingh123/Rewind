@@ -27,6 +27,7 @@ from rewind.contracts import (
     Rule,
     RuleSpec,
     TimeSpan,
+    Violation,
 )
 from rewind.core.analysis import (
     ANALYZE_JOB,
@@ -36,6 +37,8 @@ from rewind.core.analysis import (
     Insights,
     InsightWriter,
     Mark,
+    RuleOutcome,
+    rule_result,
 )
 from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, Ledger
 from rewind.core.conversation import (
@@ -420,3 +423,23 @@ async def test_a_rule_read_back_and_confirmed_checks_the_video_already_sent(
     assert "Rule 1 · every carton" in caption
     assert "Rule 2 · every carton" in caption
     assert not chat.model.requests
+
+
+def _outcome(judged: int, failed: int) -> RuleOutcome:
+    rule = Rule(
+        id="rule-1", line_id="line-1", text="Every carton needs a label before it leaves.",
+        normalized_text="every carton needs a label before it leaves", spec=CARTON_RULE,
+        created_at=NOW,
+    )  # fmt: skip
+    violations = tuple(
+        Violation(id=f"v{i}", rule_id=rule.id, footage_id="f1", track_id=f"carton#{i}",
+                  t=float(i), reason="no shipping label when it left the view",
+                  clip=TimeSpan(start=0, end=float(i) + 1))
+        for i in range(failed)
+    )  # fmt: skip
+    return RuleOutcome(1, rule, judged, violations)
+
+
+def test_nearly_every_item_lacking_the_part_says_the_name_may_not_match_the_look() -> None:
+    assert "I may not recognise it by that name" in rule_result(_outcome(10, 9), None)
+    assert "I may not recognise it by that name" not in rule_result(_outcome(18, 2), None)
