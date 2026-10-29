@@ -16,7 +16,16 @@ from rewind.contracts import (
     Zone,
 )
 from rewind.core.ports import ConceptPrompt
-from rewind.core.rules import PREDICATES, Keyframe, RuleError, Scene, evaluate, find_zone
+from rewind.core.rules import (
+    PREDICATES,
+    Check,
+    Keyframe,
+    RuleError,
+    Scene,
+    checks,
+    evaluate,
+    find_zone,
+)
 from tests.fakes import FakeSegmenter
 
 FOOTAGE = "f1"
@@ -85,7 +94,48 @@ def test_at_checkpoint_needs_the_part_just_before_the_item_leaves_the_view() -> 
 
     assert (violation.track_id, violation.t) == ("b", 8.0)
     assert violation.reason == "no cap when it left the view"
-    assert violation.clip == TimeSpan(start=4.0, end=10.0)
+    assert violation.clip == TimeSpan(start=5.0, end=9.0)
+
+
+# Whole in the frame until 5.5 s, then a sliver at the right border for 2 s before it is gone.
+def slow_exit(track_id: str, y: float = 0.5) -> Track:
+    whole = [at("jar", t / 2, 0.3 + t / 20, y, 0.2) for t in range(12)]
+    sliver = [
+        Observation(
+            footage_id=FOOTAGE, t=6.0 + i / 2, concept="jar",
+            box=Box(x0=0.85 + i / 20, y0=y - 0.1, x1=1.0, y1=y + 0.1), score=0.9,
+        )
+        for i in range(4)
+    ]  # fmt: skip
+    return Track(
+        footage_id=FOOTAGE, track_id=track_id, concept="jar", observations=(*whole, *sliver)
+    )
+
+
+def test_an_exit_is_checked_while_the_item_is_still_whole_in_the_frame() -> None:
+    labelled, bare = slow_exit("labelled", y=0.3), slow_exit("bare", y=0.7)
+    # The label is cut off by the border in the sliver, as on a real belt.
+    parts = [on(labelled, "label", t) for t in (5.0, 5.5)] + [on(bare, "label", 1.0)]
+    spec = rule(parts={"label": "label"}, requirements=[needs("has", part="label")])
+    test_scene = scene([labelled, bare], parts)
+
+    [violation] = evaluate("r1", spec, test_scene)
+
+    assert (violation.track_id, violation.t) == ("bare", 7.5)
+    assert violation.clip == TimeSpan(start=4.5, end=8.5)
+    assert checks(spec, test_scene) == (Check("bare", 7.5, 5.5), Check("labelled", 7.5, 5.5))
+
+
+def test_lost_tracks_background_objects_and_items_never_seen_whole_are_not_judged() -> None:
+    lost = track("lost", [(t / 2, 0.2 + t / 20) for t in range(8)])
+    background = track("background", [(t / 2, 0.5 + (t % 2) / 100) for t in range(20)], y=0.2)
+    # Runs along the top border, so it is never whole in the frame.
+    cut_off = track("cut_off", [(t / 2, 0.2 + t / 20) for t in range(8)], y=0.1)
+    spec = rule(parts={"label": "label"}, requirements=[needs("has", part="label")])
+    test_scene = scene([lost, background, cut_off], [])
+
+    assert evaluate("r1", spec, test_scene) == ()
+    assert checks(spec, test_scene) == ()
 
 
 def test_ever_before_accepts_the_part_at_any_point_before_the_checkpoint() -> None:
@@ -192,7 +242,7 @@ def test_dwell_flags_an_item_that_stays_in_the_zone_too_long() -> None:
 
     assert (violation.track_id, violation.t) == ("stuck", 8.0)
     assert violation.reason == "stayed in capper for 9.0 s, more than 5 s"
-    assert violation.clip == TimeSpan(start=3.0, end=10.0)
+    assert violation.clip == TimeSpan(start=3.0, end=9.0)
 
 
 def test_rate_flags_each_whole_minute_below_the_minimum() -> None:
