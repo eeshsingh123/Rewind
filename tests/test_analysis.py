@@ -284,7 +284,7 @@ async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_
     *_, last = setup.channel.progress("job-2")
     assert last.startswith("Checked your video in ")
     assert last.endswith(
-        "· $0.00\n\n✓ Video received\n✓ Video read (0:10)\n✓ Found 2 cartons\n"
+        "· $0.00\n\n✓ Video received\n✓ Video read (0:10)\n✓ Found the cartons\n"
         "✓ Looked for shipping labels on 2 cartons\n✓ Checked 1 rule\n✓ Made the clip"
     )
     assert clip.caption == ("Rule 1 · clip 1 of 1\nThe carton at 00:03: no shipping label.")
@@ -378,7 +378,7 @@ async def test_a_check_asked_for_while_the_video_is_read_starts_once_it_is_ready
     getting, received, *checklist = setup.channel.progress(_ack_key(setup.channel))
     assert (getting, received) == ("⏳ Getting your video…", "✓ Video received\n⏳ Reading it…")
     # The same message becomes the check's checklist, and ends ticked off.
-    assert checklist[0].startswith("Checking your video · under a minute · about $0.")
+    assert checklist[0].startswith("Checking your video · about 2 min · from $0.")
     assert checklist[-1].startswith("Checked your video in ")
     assert "I'm still reading that video. I'll check it as soon as it's ready." in texts
     # The result is a new message with the clip, so the phone notifies.

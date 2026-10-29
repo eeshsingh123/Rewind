@@ -4,7 +4,7 @@ import logging
 import math
 import tempfile
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -90,10 +90,12 @@ ANALYZE_JOB = "analyze"
 _SPANS = TypeAdapter(tuple[TimeSpan, ...])
 # Estimates price frames only; the prompt is never sent.
 _NO_PROMPT = ConceptPrompt("estimate")
-# How long a check takes, roughly: a fixed start, then each frame SAM still has to see (one
-# request, mask decoding, and the stills of the items it finds), and each frame already cached.
+# How long a check takes, roughly: a fixed start, then each frame SAM still has to see (its
+# requests, mask decoding, and the stills of the items it finds; measured on the stock conveyor
+# clip, 2026-10-29), and each frame already cached. The cost shown is a floor: stills per item
+# and extra requests on a busy line are only known as the check runs.
 START_S = 15.0
-PAID_FRAME_S = 3.0
+PAID_FRAME_S = 6.5
 CACHED_FRAME_S = 0.2
 # The sample's line is per workspace and never the default line, so a person's own videos are
 # not checked against the sample rule.
@@ -205,7 +207,7 @@ def check_steps(footage: Footage, rules: Sequence[Rule]) -> list[Step]:
 def check_header(request: CheckRequest, what: str) -> str:
     return (
         f"{request.lead}Checking {what} · {about_time(request.estimate_s)} · "
-        f"about ${request.estimate_usd:.2f}"
+        f"from ${request.estimate_usd:.2f}"
     )
 
 
@@ -679,13 +681,15 @@ def _worst(checked: Sequence[tuple[Footage, Checked]]) -> tuple[Footage, Violati
     return None if best is None else (best[1], best[2])
 
 
+# No count here: tracks are not items yet (one box can be followed as several tracks), and the
+# items a rule judged are counted in the next steps.
 def _found_text(rules: Sequence[Rule], concepts: Sequence[str]) -> str:
     entities = sorted({rule.spec.entity.phrase for rule in rules})
-    counts = Counter(concepts)
-    found = [f"{counts[e]} {plural(e, counts[e])}" for e in entities if counts[e]]
+    seen = set(concepts)
+    found = [plural(e, 2) for e in entities if e in seen]
     if not found:
         return f"Found no {join_words([plural(e, 2) for e in entities])}"
-    return f"Found {join_words(found)}"
+    return f"Found the {join_words(found)}"
 
 
 def _looked_text(rules: Sequence[Rule], items: int) -> str:

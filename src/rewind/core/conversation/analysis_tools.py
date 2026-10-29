@@ -440,7 +440,7 @@ class Analyze:
         await self._store.put_token(CONFIRM_TOKEN, token, dict(payload), context.now + CONFIRM_TTL)
         facts.append("NOT started yet: waiting for the person to tap the confirm button")
         said = (
-            f"{request.lead}Checking {what} takes {about_time(estimate.seconds)} and costs about "
+            f"{request.lead}Checking {what} takes {about_time(estimate.seconds)} and costs from "
             f"*${total:.2f}*.\nYou've spent ${spent:.2f} of today's "
             f"${self._settings.daily_cap_usd:.2f}."
         )
