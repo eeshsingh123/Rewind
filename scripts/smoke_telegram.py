@@ -1,13 +1,19 @@
 # Live smoke run of the Telegram channel with the real agent, SAM and rules; never run in CI.
 #   uv run python scripts/smoke_telegram.py [--record-dir tests/recordings/telegram]
+#       [--send /start --send /sample] [--transcript smoke.md]
 # Polls the bot like the app does, but hands every update to the inbox twice: the second must
 # be dropped. Telegram's updates are recorded with ids and names replaced, for adapter tests.
+# --send hands messages to the inbox as if the first allowed user had typed or tapped them, so
+# a run needs nobody at the phone; --transcript writes down everything the bot sends or edits.
 # The budget guard caps the spend; the ledger total is printed on exit (Ctrl+C).
 
 import argparse
 import asyncio
 import json
 import logging
+import re
+import time
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -20,9 +26,12 @@ from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
 from rewind.contracts import CanonicalMessage
 from rewind.core.budget import EPOCH
+from rewind.core.conversation import MENU
 
 PERSON_KEYS = {"first_name": "Owner", "last_name": None, "username": "owner"}
 FAKE_ID = 100200300
+SENT = {"sendMessage", "editMessageText", "sendVideo", "setMyCommands"}
+_CAPTION = re.compile(rb'name="caption"\r\n\r\n(.*?)\r\n--', re.DOTALL)
 
 
 def redact(value: Any) -> Any:
@@ -44,13 +53,23 @@ def redact(value: Any) -> Any:
 
 # Saves getUpdates results that carry updates. Never the URL: it holds the bot token.
 class RecordingTransport(httpx.AsyncBaseTransport):
-    def __init__(self, directory: Path | None) -> None:
+    def __init__(self, directory: Path | None, transcript: Path | None) -> None:
         self._inner = httpx.AsyncHTTPTransport()
         self._directory = directory
+        self._transcript = transcript
+        self._started = time.monotonic()
+        if transcript is not None:
+            transcript.write_text("# What the bot sent\n", "utf-8")
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rpartition("/")[2]
+        if self._transcript is not None and method in SENT:
+            # A video upload is streamed; it is read first so the caption can be written down.
+            await request.aread()
         response = await self._inner.handle_async_request(request)
         body = await response.aread()
+        if self._transcript is not None and method in SENT:
+            self._write(method, request)
         if self._directory is not None and request.url.path.endswith("/getUpdates"):
             payload = json.loads(body)
             for update in payload.get("result", []):
@@ -58,6 +77,24 @@ class RecordingTransport(httpx.AsyncBaseTransport):
         return httpx.Response(
             response.status_code, headers=response.headers, content=body, request=request
         )
+
+    def _write(self, method: str, request: httpx.Request) -> None:
+        assert self._transcript is not None
+        at = f"{time.monotonic() - self._started:6.1f} s"
+        if method == "sendVideo":
+            found = _CAPTION.search(request.content)
+            text = found.group(1).decode() if found else ""
+            buttons = "inline_keyboard" in request.content.decode(errors="ignore")
+        else:
+            payload = json.loads(request.content)
+            text = payload.get("text") or json.dumps(payload.get("commands"), ensure_ascii=False)
+            markup = payload.get("reply_markup") or {}
+            buttons = [b["text"] for row in markup.get("inline_keyboard", []) for b in row]
+        entry = f"\n## {at} · {method}\n\n{text}\n"
+        if buttons:
+            entry += f"\nButtons: {buttons}\n"
+        with self._transcript.open("a", encoding="utf-8") as file:
+            file.write(entry)
 
     def _save(self, update: dict[str, Any]) -> None:
         assert self._directory is not None
@@ -74,6 +111,8 @@ async def main() -> None:
     parser.add_argument("--data-root", type=Path, default=Path("data/smoke-telegram"))
     parser.add_argument("--record-dir", type=Path)
     parser.add_argument("--cap-usd", type=Decimal, default=Decimal("0.50"))
+    parser.add_argument("--send", action="append", default=[])
+    parser.add_argument("--transcript", type=Path)
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -91,7 +130,7 @@ async def main() -> None:
     args.data_root.mkdir(parents=True, exist_ok=True)
     repository = SqlRepository.from_url(settings.database_url_or_default)
     await repository.create_tables()
-    transport = RecordingTransport(args.record_dir)
+    transport = RecordingTransport(args.record_dir, args.transcript)
     async with httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(120)) as client:
         perception = build_perception(settings, client, repository)
         chat = build_chat(settings, client, repository, perception)
@@ -103,7 +142,19 @@ async def main() -> None:
             print(f"update {message.message_id}: first={first} repeat={second}", flush=True)
             return first
 
+        await chat.telegram.set_commands(MENU)
         print("polling; send the bot a message (Ctrl+C to stop)", flush=True)
+        owner = sorted(settings.telegram_allowed_user_ids)[:1]
+        for index, text in enumerate(args.send):
+            if not owner:
+                raise SystemExit("--send needs REWIND_TELEGRAM_ALLOWED_USER_IDS")
+            message = CanonicalMessage(
+                channel="telegram", message_id=f"smoke-{time.time_ns()}-{index}",
+                chat_id=owner[0], sender_id=owner[0], received_at=datetime.now(UTC), text=text,
+            )  # fmt: skip
+            await receive_twice(message)
+            # The next one waits for the bot to answer, as a person would.
+            await chat.jobs.drain()
         try:
             await chat.telegram.poll(receive_twice)
         finally:
