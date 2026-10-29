@@ -16,16 +16,21 @@ A customer says "my box arrived without a label". The manager types that rule in
 - Rules: a sentence becomes a strict rule; plain code judges every item. Works on busy lines (SAM's 16-object limit is handled).
 - Chat (Telegram, WhatsApp built): send a video and a rule, get a live checklist, then the result with a proof clip. `/start` offers a sample clip. Rules are read back before they are used.
 - Proof clips: boxes, short tags and a clock drawn on the video.
-- Sim (Blender): built, then frozen. Not used for the demo.
+- Sim (Blender): built, then frozen. Two rendered clips with answer keys are now the demo footage (see below); nothing new is built in `sim/`.
 - Checked live on the stock clip: "All 6 boxes that left the view had a label" (correct). First run 5 min, $0.08.
 
 ## Next, in order
 
-1. **Demo footage with a real fault.** Pick 3–5 stock clips where an item visibly breaks a rule (missing label, open flap). The owner downloads them into `data/stock/` with their credits (candidates are in `data/stock/candidates/`).
-   Done when: at least one clip shows a red box for a real fault in Telegram.
+1. **Demo footage with faults.** Two sim clips, 60 s each, with answer keys:
+   - `data/sim/s1_jar_line-seed2`: 27 jars; 4 missing a label (leaving the view at about 00:08, 00:20, 00:43, 00:48), 1 missing a cap, 1 held too long at the capper; the belt stops 00:20.8–00:33.4.
+   - `data/sim/s2_carton_packing-seed2`: 25 cartons; 3 without tape, 3 without a label, 3 with a flap up (the fault times are in the key).
+   Rule sentences to use are in `sim/FAULTS.md`. Prefer "label when it enters sealing", "tape before it leaves the view" and "flaps down before tape"; the "at the end of the footage" label rule also flags cartons still upstream (open question below).
+   The owner runs the live check on both clips himself. No SAM run has been done on them yet. Fix anything general that it shows, and check the fix on the other clip.
+   Later: the owner adds real stock clips with a visible fault to `data/stock/` (candidates in `data/stock/candidates/`); the truck clip needs the engine to judge an item at its best whole sighting, not its last.
+   Done when: both clips show a red box on a real fault in Telegram.
 2. **Insights.** After a check, add at most a few lines like "first seen at 00:14, 5 times since" or "the line stopped for 40 s at 01:10", each with its clip. Show them only when they are notable; a normal run gets one quiet line.
    Done when: on a clip with a known fault, the reply gives the right first time and count, and each line links to a clip under 16 MB.
-3. **Accuracy table.** Hand-label the demo clips (which item, what time, what fault) and score Rewind against them: precision, recall, cost, run time. One table for the README.
+3. **Accuracy table.** Score Rewind against the answer keys of the two sim clips (`ground_truth.json`: which item, what time, what fault): precision, recall, cost, run time. Add a separate row for each real stock clip, hand-labelled, once there are some. One table for the README.
    Done when: the table is in the README.
 4. **Submission.** README with a diagram, a 3-minute demo video, the written answers, credits. See the checklist below.
 

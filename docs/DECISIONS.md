@@ -7,8 +7,8 @@ Why things are the way they are. Only decisions that still shape upcoming work a
 **Rules for any camera, told through one packing story.** Plain-English rules run over footage, including footage processed before the rule existed. The pitch: a complaint comes in, a new rule runs over stored footage, and the reply says when it started, how often, and shows the clip. A shelf or dock scene appears only as a short "works here too", once the packing story works on real footage.
 Why: "ask your camera anything" builds will be common; judges remember one sharp story.
 
-**Real stock footage for the demo; the sim is frozen.** The demo and the accuracy table use real, hand-labelled stock clips. The Blender sim (`sim/`) stays as built, unused.
-Why: making the sim realistic enough for SAM cost days, and real footage convinces judges more.
+**Demo on two sim clips; real stock clips come later as the "works on real footage" check.** The demo and the accuracy table start from two rendered clips, each with an exact answer key (`ground_truth.json`): `data/sim/s1_jar_line-seed2` (jars missing a cap or label, plus a belt stop) and `data/sim/s2_carton_packing-seed2` (cartons missing tape or label, or with a flap up). The owner finds real stock clips with a visible fault and adds them when ready. The Blender sim (`sim/`) stays frozen: no new scenes or code.
+Why: the stock clips found so far show no clear fault; the sim clips already have known faults and exact answers, and the accuracy table can score against them at once. Real footage still convinces judges more, so it is added as soon as a good clip exists.
 
 **Insights are computed, then worded.** Plain queries over the events find the insights: first and last time a rule failed, bursts and the stops they line up with, downtime and pace, change from earlier in the footage. Each carries its numbers and clips. Only notable ones are sent. Muse only writes the sentence.
 Why: every finding must be provable, and an insight shown on every run gets ignored.
