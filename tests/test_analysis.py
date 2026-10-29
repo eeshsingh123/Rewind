@@ -33,6 +33,8 @@ from rewind.core.analysis import (
     INGEST_JOB,
     Analysis,
     AnalysisSettings,
+    Insights,
+    InsightWriter,
     Mark,
 )
 from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, Ledger
@@ -70,6 +72,7 @@ from rewind.core.ports import (
 )
 from rewind.core.rules import RuleCompiler
 from tests.fakes import CAPABILITIES, FakeChannel, ScriptedModel, completion
+from tests.test_insights import FakeSheet
 
 pytestmark = pytest.mark.anyio
 
@@ -226,6 +229,9 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
         planner=Planner(STRATEGIES), runner=PerceptionRunner(proxies, observations),
         observations=observations, segmenters=Segmenters(sam, ledger),
         compiler_for=no_compiler, video=video, stills=video, clips=video,
+        insights=Insights(
+            repository, blobs, FakeSheet(), lambda _: InsightWriter(ScriptedModel([]), blobs)
+        ),
         notifier=Outbox({"telegram": channel}), capabilities={"telegram": CAPABILITIES},
         settings=AnalysisSettings(fps=2.0),
     )  # fmt: skip
@@ -285,7 +291,8 @@ async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_
     assert last.startswith("Checked your video in ")
     assert last.endswith(
         "· $0.00\n\n✓ Video received\n✓ Video read (0:10)\n✓ Found the cartons\n"
-        "✓ Looked for shipping labels on 2 cartons\n✓ Checked 1 rule\n✓ Made the clip"
+        "✓ Looked for shipping labels on 2 cartons\n✓ Checked 1 rule\n✓ Nothing unusual\n"
+        "✓ Made the clip"
     )
     assert clip.caption == ("Rule 1 · clip 1 of 1\nThe carton at 00:03: no shipping label.")
     # The result's clip is made once and reused when the same clip is asked for again.

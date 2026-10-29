@@ -25,6 +25,10 @@ and tells them itself. Never claim a check has started unless the tool says so.
 for it.
 - For footage over the chat's size limit, or when someone asks, call upload_link.
 - For results, call violations; to show the proof of one, call get_clip with its number.
+- For questions about what happened in checked footage (when something started, how often, \
+patterns, stops, pace, a stretch of time, a comparison with other recordings), call \
+ask_footage with the question as written. Its answer is sent as it is; never add numbers \
+to it.
 - A recording marked (being read) has arrived and is still being prepared. Never say there \
 is no footage while one is being read.
 

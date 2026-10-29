@@ -28,6 +28,7 @@ from rewind.contracts import (
     Violation,
     Zone,
 )
+from rewind.core.analysis.insights import Answer, Found, Insights, SavedInsight
 from rewind.core.analysis.parts import (
     PartLooker,
     StillGrabber,
@@ -36,7 +37,14 @@ from rewind.core.analysis.parts import (
     tracking_spec,
 )
 from rewind.core.analysis.progress import Checklist, Notifier, Step, about_time
-from rewind.core.analysis.proof import ClipMaker, ProofMarks, passed_marks, proof_marks
+from rewind.core.analysis.proof import (
+    ClipMaker,
+    Mark,
+    ProofMarks,
+    marks_key,
+    passed_marks,
+    proof_marks,
+)
 from rewind.core.analysis.replies import (
     RuleOutcome,
     clip_caption,
@@ -46,6 +54,7 @@ from rewind.core.analysis.replies import (
     rule_result,
     video_length,
 )
+from rewind.core.analysis.timeline import Judged, judged_items, merged_timeline
 from rewind.core.analysis.tracks import naive_tracks
 from rewind.core.budget import BudgetExceededError, BudgetScope
 from rewind.core.perception import (
@@ -164,6 +173,7 @@ class Checked:
     skipped: tuple[str, ...]
     # What to show when nothing failed: every judged item around the first one, in green.
     passed: tuple[TimeSpan, ProofMarks] | None
+    found: Found
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +210,7 @@ def check_steps(footage: Footage, rules: Sequence[Rule]) -> list[Step]:
     if parts:
         steps.append(Step("parts", f"Looking for {join_words([plural(p, 2) for p in parts])}"))
     steps.append(Step("rules", f"Checking {len(rules)} {plural('rule', len(rules))}"))
+    steps.append(Step("insights", "Looking for patterns"))
     steps.append(Step("clip", "Making the clip"))
     return steps
 
@@ -252,6 +263,7 @@ class Analysis:
         video: VideoTools,
         stills: StillGrabber,
         clips: ClipMaker,
+        insights: Insights,
         notifier: Notifier,
         capabilities: Mapping[str, ChannelCapabilities],
         settings: AnalysisSettings,
@@ -267,6 +279,7 @@ class Analysis:
         self._video = video
         self._stills = stills
         self._clips = clips
+        self._insights = insights
         self._notifier = notifier
         self._capabilities = capabilities
         self._settings = settings
@@ -385,10 +398,10 @@ class Analysis:
         caption = clip_caption(violation, number, count, numbers.get(violation.rule_id))
         if max_bytes <= 0:
             return Clip((), caption)
-        marks_key = _marks_key(violation.id)
+        stored = marks_key(violation.id)
         marks = (
-            _MARKS.validate_json(await self._blobs.read(marks_key))
-            if await self._blobs.exists(marks_key)
+            _MARKS.validate_json(await self._blobs.read(stored))
+            if await self._blobs.exists(stored)
             else ProofMarks(marks=())
         )
         span = TimeSpan(
@@ -398,6 +411,40 @@ class Analysis:
         if (await self._blobs.local_path(key)).stat().st_size > max_bytes:
             return Clip((), caption + "\n(The clip is too big to send on this chat.)")
         return Clip((ReplyMedia(kind="video", blob_key=key, caption=caption),), caption)
+
+    async def ask(
+        self, workspace_id: str, footage: Footage, question: str, window: TimeSpan | None
+    ) -> Answer | None:
+        line = await self._repository.get_line(footage.line_id)
+        if line is None:
+            return None
+        numbers = await self.rule_numbers(line.id)
+        return await self._insights.ask(workspace_id, line, footage, numbers, question, window)
+
+    async def insight(self, footage: Footage, insight_id: str) -> SavedInsight | None:
+        return (await self._insights.saved(footage.id)).get(insight_id)
+
+    async def insight_clip(self, footage: Footage, insight: SavedInsight, max_bytes: int) -> Clip:
+        if max_bytes <= 0 or insight.clip is None:
+            return Clip((), insight.text)
+        marks: dict[tuple[float, float, float], Mark] = {}
+        for violation_id in insight.violation_ids:
+            stored = marks_key(violation_id)
+            if not await self._blobs.exists(stored):
+                continue
+            for mark in _MARKS.validate_json(await self._blobs.read(stored)).marks:
+                first = mark.path[0]
+                key = (first.t, first.box.x0, first.box.y0)
+                # The same item is drawn once, flagged when any violation flags it.
+                if key not in marks or mark.kind == "flagged":
+                    marks[key] = mark
+        span = TimeSpan(start=max(0.0, insight.clip.start),
+                        end=min(footage.duration_s, insight.clip.end))  # fmt: skip
+        key = await self._render(footage, span, ProofMarks(marks=tuple(marks.values())),
+                                 f"insight-{insight.id}")  # fmt: skip
+        if (await self._blobs.local_path(key)).stat().st_size > max_bytes:
+            return Clip((), insight.text + "\n(The clip is too big to send on this chat.)")
+        return Clip((ReplyMedia(kind="video", blob_key=key, caption=insight.text),), insight.text)
 
     # The clip that goes with the result: the first failure of the rule that failed most, or,
     # when nothing failed, the items that passed.
@@ -442,7 +489,12 @@ class Analysis:
     async def _result_buttons(
         self, line: Line, checked: Sequence[tuple[Footage, Checked]], footage_ids: Sequence[str]
     ) -> tuple[Button, ...]:
-        buttons: list[Button] = []
+        buttons: list[Button] = [
+            Button(label=f"▶ {insight.label}", value=f"/insight {footage.id} {insight.id}")
+            for footage, result in checked
+            for insight in result.found.insights
+            if insight.clip is not None
+        ]
         for footage, result in checked:
             count = sum(len(o.violations) for o in result.outcomes)
             if count > 1:
@@ -532,6 +584,7 @@ class Analysis:
         await checklist.start("rules")
         outcomes: list[RuleOutcome] = []
         passed: tuple[TimeSpan, ProofMarks] | None = None
+        every: dict[str, tuple[Judged, ...]] = {}
         for rule in rules:
             if rule.id not in judged:
                 continue
@@ -539,13 +592,33 @@ class Analysis:
             items = await self._save_marks(rule.spec, scene, judged[rule.id], found)
             number = numbers.get(rule.id, 0)
             outcomes.append(RuleOutcome(number, rule, len(judged[rule.id]), found))
+            every[rule.id] = judged_items(rule.id, judged[rule.id], found)
             if passed is None:
                 passed = passed_marks(items, judged[rule.id], footage.duration_s)
         violations = [v for outcome in outcomes for v in outcome.violations]
         await self._repository.replace_violations(footage.id, list(judged), violations)
         await checklist.finish("rules", f"Checked {len(rules)} {plural('rule', len(rules))}")
+        previous = await self._insights.timeline(footage.id)
+        entities = {rule.spec.entity.phrase for rule in rules}
+        paths = [
+            [(o.t, (o.box.x0 + o.box.x1) / 2, (o.box.y0 + o.box.y1) / 2)
+             for o in sorted(track.observations, key=lambda o: o.t)]
+            for track in tracks
+            if track.concept in entities
+        ]  # fmt: skip
+        timeline = merged_timeline(previous, footage.id, footage.duration_s, every, spans, paths)
+        await self._insights.save_timeline(timeline)
+        await checklist.start("insights")
+        insights = await self._insights.find(scope.workspace_id, line, footage, numbers)
+        charges += insights.charges
+        noticed = len(insights.insights)
+        await checklist.finish(
+            "insights",
+            f"Found {noticed} {plural('thing', noticed)} worth a look" if noticed
+            else "Nothing unusual",
+        )  # fmt: skip
         cost = CostEstimate(charges=tuple(charges)).total_usd
-        return Checked(line, tuple(outcomes), cost, tuple(skipped), passed)
+        return Checked(line, tuple(outcomes), cost, tuple(skipped), passed, insights)
 
     # What each proof clip draws is saved now, while the tracks are at hand, so a clip asked
     # for later shows exactly the boxes this check decided on.
@@ -565,7 +638,7 @@ class Analysis:
             if violation.track_id is None:
                 continue
             marks = proof_marks(violation, items, judged, failed)
-            await self._blobs.write(_marks_key(violation.id), _MARKS.dump_json(marks))
+            await self._blobs.write(marks_key(violation.id), _MARKS.dump_json(marks))
         return items
 
     # Areas a rule names but nobody drew are found by text on one still, then kept on the line
@@ -656,6 +729,11 @@ def _result_text(
         blocks = [rule_result(o, clipped if clipped in o.violations else None)
                   for o in result.outcomes]  # fmt: skip
         blocks += result.skipped
+        if result.found.insights:
+            lines = [f"• {insight.text}" for insight in result.found.insights]
+            blocks.append("\n".join(["*What stands out*", *lines]))
+        elif result.found.quiet:
+            blocks.append(result.found.quiet)
         if len(checked) > 1:
             blocks.insert(0, f"*{footage_name(footage)}* ({video_length(footage.duration_s)})")
         sections.append("\n\n".join(blocks))
@@ -727,10 +805,6 @@ def _cached(
 
 def _spans_key(footage_id: str) -> str:
     return f"footage/{footage_id}/active_spans.json"
-
-
-def _marks_key(violation_id: str) -> str:
-    return f"proof/{violation_id}.json"
 
 
 def _strings(value: JsonValue) -> tuple[str, ...]:
