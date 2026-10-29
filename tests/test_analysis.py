@@ -69,7 +69,7 @@ from rewind.core.ports import (
     VideoToolsError,
 )
 from rewind.core.rules import RuleCompiler
-from tests.fakes import FakeChannel, ScriptedModel, completion
+from tests.fakes import CAPABILITIES, FakeChannel, ScriptedModel, completion
 
 pytestmark = pytest.mark.anyio
 
@@ -226,7 +226,7 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
         planner=Planner(STRATEGIES), runner=PerceptionRunner(proxies, observations),
         observations=observations, segmenters=Segmenters(sam, ledger),
         compiler_for=no_compiler, video=video, stills=video, clips=video,
-        notifier=Outbox({"telegram": channel}),
+        notifier=Outbox({"telegram": channel}), capabilities={"telegram": CAPABILITIES},
         settings=AnalysisSettings(fps=2.0),
     )  # fmt: skip
     jobs = InProcessJobRunner()
@@ -271,14 +271,24 @@ async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_
     # Video follows the cartons; the label is looked for on one still, shared by both cartons.
     assert setup.sam.prompts == ["carton", "shipping label"]
     assert setup.sam.calls == calls_after_first == 2
+    # The result is a new message: the clip of the failure, with the summary as its caption.
     done = setup.channel.sent[-1]
-    summary, buttons = done.text, done.buttons
-    assert summary.startswith("Done in ")
-    assert "for $0.00" in summary
-    assert "Rule 1 · Every carton needs a label before it leaves." in summary
-    assert "❌ 1 of 2 cartons that left the view failed: the carton at 00:03." in summary
-    assert [b.label for b in buttons] == ["Show clips"]
+    [attached] = done.media
+    assert attached.caption == (
+        "❌ *1 of 2 cartons left the view without a shipping label*\n"
+        "The carton at 00:03 is the one in the clip (in red).\n"
+        "Rule 1 · every carton has a shipping label when it leaves the view."
+    )
+    assert [b.label for b in done.buttons] == ["Send another video", "Add a rule"]
+    # Progress is one message per check, ticked off stage by stage.
+    *_, last = setup.channel.progress("job-2")
+    assert last.startswith("Checked your video in ")
+    assert last.endswith(
+        "· $0.00\n\n✓ Video received\n✓ Video read (0:10)\n✓ Found 2 cartons\n"
+        "✓ Looked for shipping labels on 2 cartons\n✓ Checked 1 rule\n✓ Made the clip"
+    )
     assert clip.caption == ("Rule 1 · clip 1 of 1\nThe carton at 00:03: no shipping label.")
+    # The result's clip is made once and reused when the same clip is asked for again.
     [marks] = setup.video.drawn
     assert sorted((m.kind, m.tag) for m in marks) == [
         ("flagged", "no shipping label"), ("passed", "")
@@ -313,6 +323,7 @@ async def _chat(setup: Setup, confirm_above_usd: Decimal) -> Chat:
         agent=Agent(INSTRUCTIONS, Toolbox.of([analyze.tool()]), TurnLimits()),
         model_for=lambda workspace_id: model, readings=readings,
         settings=ConversationSettings(frozenset(), "https://tunnel.test"), clock=lambda: NOW,
+        commands={"/keep_rule": analyze.keep_rule},
     )  # fmt: skip
     setup.jobs.register(TURN_JOB, conversation.handle_job)
     setup.jobs.register(INGEST_JOB, analyze.handle_ingest)
@@ -322,14 +333,11 @@ async def _chat(setup: Setup, confirm_above_usd: Decimal) -> Chat:
 
 async def _video_then_check_it(setup: Setup, chat: Chat) -> None:
     setup.video.gate = asyncio.Event()
-    chat.model.replies = [
-        completion("", ToolCall("c1", "analyze", "{}")),
-        completion("Still reading the video; I'll check it as soon as it's ready."),
-    ]
+    chat.model.replies = [completion("", ToolCall("c1", "analyze", "{}"))]
     video = Attachment(kind="video", ref="file-9", size_bytes=6_600_000, filename="clip.mp4")
     await chat.inbox.receive(_message(None, "m1", attachments=(video,)))
     await chat.inbox.receive(_message("Check it", "m2"))
-    await _until(lambda: any(s.kind == "send" for s in setup.channel.shown))
+    await _until(lambda: any("still reading" in s.text for s in setup.channel.shown))
     setup.video.gate.set()
     await setup.jobs.drain()
 
@@ -363,20 +371,45 @@ async def test_a_check_asked_for_while_the_video_is_read_starts_once_it_is_ready
     await _video_then_check_it(setup, chat)
 
     state = chat.model.requests[0].messages[1].text
-    tool_result = chat.model.requests[1].messages[-1].text
     assert "recording: clip.mp4 (being read)" in state
-    assert tool_result.startswith("NOT started yet: clip.mp4 is still being read.")
+    # The tool words the reply itself, so the model is asked once.
+    assert len(chat.model.requests) == 1
     texts = [s.text for s in setup.channel.shown if s.kind in ("send", "progress")]
-    ack, ready = setup.channel.progress(_ack_key(setup.channel))
-    assert ack.startswith("Got the video for *Packing line 2*.")
-    assert ready.startswith("Got it: 10 s of *Packing line 2* (clip.mp4, 1280x720).")
-    assert "Checking it against 1 rule now (about $0." in ready
-    # The agent's one reply comes between the ack and the ready message; the check comes last.
-    assert texts[:3] == [
-        ack,
-        "Still reading the video; I'll check it as soon as it's ready.",
-        ready,
-    ]
-    assert texts[3].startswith("Checking *clip.mp4*")
-    assert texts[-1].startswith("Done in ")
+    getting, received, *checklist = setup.channel.progress(_ack_key(setup.channel))
+    assert (getting, received) == ("⏳ Getting your video…", "✓ Video received\n⏳ Reading it…")
+    # The same message becomes the check's checklist, and ends ticked off.
+    assert checklist[0].startswith("Checking your video · under a minute · about $0.")
+    assert checklist[-1].startswith("Checked your video in ")
+    assert "I'm still reading that video. I'll check it as soon as it's ready." in texts
+    # The result is a new message with the clip, so the phone notifies.
+    result = setup.channel.sent[-1]
+    assert result.media
+    assert result.media[0].caption
+    assert result.media[0].caption.startswith("❌ *1 of 2 cartons left the view")
     assert not any("no recordings" in text for text in texts)
+
+
+async def test_a_rule_read_back_and_confirmed_checks_the_video_already_sent(
+    setup: Setup,
+) -> None:
+    chat = await _chat(setup, confirm_above_usd=Decimal(1))
+    draft = setup.rule.model_copy(
+        update={"id": "rule-2", "active": False, "text": "Cartons need labels.",
+                "normalized_text": "cartons need labels"}
+    )  # fmt: skip
+    await setup.repository.save_rule(draft)
+
+    await chat.inbox.receive(_message("/keep_rule rule-2", "m3"))
+    await setup.jobs.drain()
+
+    rule = await setup.repository.get_rule("rule-2")
+    assert rule is not None
+    assert rule.active
+    checklist = setup.channel.progress("reply-m3")
+    assert checklist[0].startswith("Saved as rule 2. Checking your video · ")
+    assert "○ Checking 2 rules" in checklist[0]
+    assert checklist[-1].startswith("Saved as rule 2. Checked your video in ")
+    caption = setup.channel.sent[-1].media[0].caption or ""
+    assert "Rule 1 · every carton" in caption
+    assert "Rule 2 · every carton" in caption
+    assert not chat.model.requests

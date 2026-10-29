@@ -40,7 +40,7 @@ class Setup:
 
 
 @pytest.fixture
-async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
+async def setup(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[Setup]:
     repository = SqlRepository.from_url(f"sqlite+aiosqlite:///{tmp_path / 'rewind.db'}")
     await repository.create_tables()
     jobs = InProcessJobRunner()
@@ -51,7 +51,10 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
         channels={"telegram": channel},
         agent=Agent(INSTRUCTIONS, Toolbox.of([create_line(repository)]), TurnLimits()),
         model_for=lambda workspace_id: model, readings=Readings(),
-        settings=ConversationSettings(frozenset(), "https://tunnel.test"), clock=lambda: NOW,
+        settings=ConversationSettings(
+            frozenset(), "https://tunnel.test", ack_after_s=getattr(request, "param", 2.0)
+        ),
+        clock=lambda: NOW,
     )  # fmt: skip
     jobs.register(TURN_JOB, conversation.handle_job)
     inbox = Inbox(repository, jobs)
@@ -87,7 +90,8 @@ async def test_the_agent_calls_a_tool_then_answers_from_its_result(setup: Setup)
 
     workspace_id = await setup.repository.workspace_for_chat(ChatRef("telegram", "42"))
     assert workspace_id is not None
-    assert [line.name for line in await setup.repository.lines(workspace_id)] == ["Packing line 2"]
+    lines = await setup.repository.lines(workspace_id)
+    assert sorted(line.name for line in lines) == ["Line 1", "Packing line 2"]
     tool_result = setup.model.requests[1].messages[-1]
     assert tool_result.role == "tool"
     assert "created line 'Packing line 2'" in tool_result.text
@@ -97,3 +101,13 @@ async def test_the_agent_calls_a_tool_then_answers_from_its_result(setup: Setup)
         "New line: Packing line 2",
         "Created *Packing line 2*.",
     ]
+
+
+@pytest.mark.parametrize("setup", [0.0], indirect=True)
+async def test_a_slow_turn_says_one_moment_and_the_answer_takes_its_place(setup: Setup) -> None:
+    setup.model.replies = [completion("Hi, I'm Rewind.")]
+
+    await setup.conversation.handle(_message("hi"))
+
+    shown = [(s.kind, s.text) for s in setup.channel.shown if s.kind != "activity"]
+    assert shown == [("progress", "One moment…"), ("progress", "Hi, I'm Rewind.")]

@@ -6,7 +6,7 @@ from typing import NamedTuple
 
 import httpx
 
-from rewind.contracts import Attachment, ChannelCapabilities, Charge, Reply
+from rewind.contracts import Attachment, Button, ChannelCapabilities, Charge, Reply
 from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
 from rewind.core.ports import Completion, CompletionRequest, ToolCall
 
@@ -100,8 +100,10 @@ class FakeChannel:
         self.sent.append(reply)
         self.shown.append(Shown("send", reply.chat_id, reply.text))
 
-    async def show_progress(self, chat_id: str, key: str, text: str) -> None:
-        self.sent.append(Reply(channel=self.name, chat_id=chat_id, text=text))
+    async def show_progress(
+        self, chat_id: str, key: str, text: str, buttons: tuple[Button, ...] = ()
+    ) -> None:
+        self.sent.append(Reply(channel=self.name, chat_id=chat_id, text=text, buttons=buttons))
         self.shown.append(Shown("progress", chat_id, text, key))
 
     async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
