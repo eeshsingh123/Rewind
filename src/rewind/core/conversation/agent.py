@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from rewind.contracts import Button, ReplyMedia
@@ -16,6 +17,9 @@ from rewind.core.ports import (
 
 _OUTPUT_UNITS = frozenset({"output_token", "reasoning_token"})
 STOPPED = "I stopped there to keep this turn small. Ask me again to continue."
+
+# Told the name of each tool as it starts, so the chat can say what is happening.
+type OnTool = Callable[[str], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,7 @@ class Agent:
         state: str,
         history: tuple[HistoryEntry, ...],
         text: str,
+        on_tool: OnTool | None = None,
     ) -> AgentReply:
         # The fixed instructions come first so the provider can cache them across turns.
         messages: list[ChatMessage] = [SystemMessage(self._instructions), SystemMessage(state)]
@@ -72,6 +77,7 @@ class Agent:
                 text = completion.text.strip() or STOPPED
                 return AgentReply(text, tuple(buttons), tuple(media), tuple(jobs))
             messages.append(AssistantMessage(completion.text, completion.tool_calls))
+            replies: list[str] = []
             for call in completion.tool_calls:
                 if tool_calls_left <= 0:
                     result_text = (
@@ -79,12 +85,19 @@ class Agent:
                     )
                 else:
                     tool_calls_left -= 1
+                    if on_tool is not None:
+                        await on_tool(call.name)
                     result = await self._toolbox.call(context, call.name, call.arguments)
                     result_text = result.text
                     buttons += result.buttons
                     media += result.media
                     jobs += result.jobs
+                    if result.reply is not None:
+                        replies.append(result.reply)
                 messages.append(ToolResultMessage(call.id, result_text))
+            if replies:
+                text = "\n\n".join(reply for reply in replies if reply)
+                return AgentReply(text, tuple(buttons), tuple(media), tuple(jobs))
         return AgentReply(STOPPED, tuple(buttons), tuple(media), tuple(jobs))
 
 

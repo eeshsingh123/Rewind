@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from rewind.contracts import Attachment, CanonicalMessage, ChannelCapabilities, Reply
+from rewind.contracts import Attachment, Button, CanonicalMessage, ChannelCapabilities, Reply
 from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
 from rewind.core.ports import BlobStore, ChannelError
 
@@ -136,7 +136,13 @@ class WhatsAppChannel:
             text = {"body": reply.text[: CAPABILITIES.max_text_chars]}
             await self._message(reply.chat_id, {"type": "text", "text": text})
 
-    async def show_progress(self, chat_id: str, key: str, text: str) -> None:
+    async def show_progress(
+        self, chat_id: str, key: str, text: str, buttons: tuple[Button, ...] = ()
+    ) -> None:
+        # Buttons wait for a tap, so a message that has them is always sent.
+        if buttons:
+            await self.send(Reply(channel=self.name, chat_id=chat_id, text=text, buttons=buttons))
+            return
         sent = self._progress.get((chat_id, key), 0)
         if sent >= _PROGRESS_MESSAGES:
             return

@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     # Comma-separated, in international format without the plus.
     whatsapp_allowed_numbers: Annotated[set[str], NoDecode] = Field(default_factory=set[str])
     # An analysis estimated above this asks for a confirm button first (D-7).
-    confirm_above_usd: Decimal = Field(default=Decimal("0.25"), ge=0)
+    confirm_above_usd: Decimal = Field(default=Decimal("0.50"), ge=0)
+    # The clip behind [Try a sample]; when the file is missing the button is left out.
+    sample_video: Path = Path("data/stock/pexels_5903898_packages_conveyor_720p.mp4")
 
     @property
     def database_url_or_default(self) -> str:

@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Protocol
 
 from rewind.contracts import Charge, Footage, InZone, Observation, RuleSpec
-from rewind.core.perception import CachedFrames, CacheKey, ObservationStore, frame_index
+from rewind.core.perception import (
+    CachedFrames,
+    CacheKey,
+    ObservationStore,
+    OnProgress,
+    frame_index,
+)
 from rewind.core.ports import BlobStore, ConceptPrompt, Segmenter, SegmentRequest
 from rewind.core.rules import Check
 
@@ -61,10 +67,16 @@ class PartLooker:
 
     # One image call per concept and moment, cached like video frames, so a rerun is free.
     async def look(
-        self, footage: Footage, times: Mapping[str, set[float]], segmenter: Segmenter
+        self,
+        footage: Footage,
+        times: Mapping[str, set[float]],
+        segmenter: Segmenter,
+        on_progress: OnProgress | None = None,
     ) -> PartLooks:
         observations: list[Observation] = []
         charges: list[Charge] = []
+        total = sum(len(wanted) for wanted in times.values())
+        done = 0
         for concept, wanted in sorted(times.items()):
             # Kept apart from video frames of the same concept: a still is not a tracked frame.
             key = CacheKey(footage.content_hash, concept, f"{segmenter.model_version}/still")
@@ -76,6 +88,9 @@ class PartLooker:
                     frames[index] = found
                     charges.extend(paid)
                 observations.extend(frames[index])
+                done += 1
+                if on_progress is not None:
+                    await on_progress(done, total)
             await self._store.save(key, CachedFrames(frames=frames))
         return PartLooks(tuple(observations), tuple(charges))
 

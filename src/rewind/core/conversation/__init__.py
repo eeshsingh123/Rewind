@@ -5,9 +5,9 @@ from rewind.core.conversation.analysis_tools import (
     Findings,
     add_rule,
     describe_rule,
-    rule_commands,
 )
 from rewind.core.conversation.channel import (
+    Ack,
     ActivityKind,
     ChatChannel,
     Outbox,
@@ -22,8 +22,10 @@ from rewind.core.conversation.conversation import (
     ConversationSettings,
     Inbox,
 )
+from rewind.core.conversation.guide import MENU, guide_commands
 from rewind.core.conversation.prompt import INSTRUCTIONS
 from rewind.core.conversation.readings import Readings
+from rewind.core.conversation.sample import Sample
 from rewind.core.conversation.store import ChatRef, ConversationStore, HistoryEntry
 from rewind.core.conversation.tools import (
     AgentTool,
@@ -39,7 +41,9 @@ from rewind.core.conversation.workspace_tools import (
     UPLOAD_TOKEN,
     LineArguments,
     create_line,
+    ensure_line,
     list_rules,
+    rename_line,
     resolve_line,
     upload_link,
 )
@@ -47,8 +51,10 @@ from rewind.core.conversation.workspace_tools import (
 __all__ = [
     "INGEST_JOB",
     "INSTRUCTIONS",
+    "MENU",
     "TURN_JOB",
     "UPLOAD_TOKEN",
+    "Ack",
     "ActivityKind",
     "Agent",
     "AgentReply",
@@ -69,6 +75,7 @@ __all__ = [
     "LineArguments",
     "Outbox",
     "Readings",
+    "Sample",
     "ToolArguments",
     "ToolError",
     "ToolResult",
@@ -79,9 +86,11 @@ __all__ = [
     "add_rule",
     "create_line",
     "describe_rule",
+    "ensure_line",
+    "guide_commands",
     "list_rules",
+    "rename_line",
     "resolve_line",
-    "rule_commands",
     "upload_link",
     "with_activity",
 ]

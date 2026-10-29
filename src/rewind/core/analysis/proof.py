@@ -10,6 +10,9 @@ from rewind.core.rules import Check, Item
 
 # A part found on an item is drawn this long either side of the moment it was seen.
 PART_SHOWN_S = 0.6
+# A clip of a passing item starts this long before the moment it was judged and ends after it.
+PASSED_BEFORE_S = 3.0
+PASSED_AFTER_S = 2.0
 _MOMENT = re.compile(r" (when|before) (it left the view|the footage ended|it entered \S+)$")
 
 
@@ -73,6 +76,28 @@ def proof_marks(
             kind, tag = "passed", ""
         marks.append(Mark(kind=kind, tag=tag, path=path, parts=_parts(item, flagged.clip)))
     return ProofMarks(marks=tuple(marks))
+
+
+# The clip when nothing failed: the first item judged, and every other judged item in view.
+def passed_marks(
+    items: Mapping[str, Item], checks: Sequence[Check], duration_s: float
+) -> tuple[TimeSpan, ProofMarks] | None:
+    if not checks:
+        return None
+    first = min(checks, key=lambda check: check.look_at)
+    span = TimeSpan(
+        start=max(0.0, first.look_at - PASSED_BEFORE_S),
+        end=min(duration_s, first.look_at + PASSED_AFTER_S),
+    )
+    marks: list[Mark] = []
+    for check in checks:
+        item = items.get(check.track_id)
+        if item is None:
+            continue
+        path = _within(item.track, span)
+        if path:
+            marks.append(Mark(kind="passed", tag="", path=path, parts=_parts(item, span)))
+    return (span, ProofMarks(marks=tuple(marks))) if marks else None
 
 
 def _within(track: Track, span: TimeSpan) -> tuple[Sighting, ...]:

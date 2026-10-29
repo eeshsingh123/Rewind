@@ -13,6 +13,7 @@ from rewind.app.chat import Chat, build_chat
 from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
 from rewind.app.upload import upload_router
+from rewind.core.conversation import MENU
 from rewind.core.ports import ChannelError
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ def _start_channels(
         if not settings.telegram_allowed_user_ids:
             logger.warning("Telegram has no allowlist: anyone who finds the bot can spend")
         tasks.append(asyncio.create_task(chat.telegram.poll(chat.inbox.receive)))
+        tasks.append(asyncio.create_task(_set_telegram_commands(chat)))
         logger.info("Telegram polling started")
     app_secret, verify_token = settings.whatsapp_app_secret, settings.whatsapp_verify_token
     if chat.whatsapp is not None and settings.whatsapp_app_id and app_secret and verify_token:
@@ -93,6 +95,16 @@ def _start_channels(
         )  # fmt: skip
         tasks.append(asyncio.create_task(registration))
     return tasks
+
+
+# The "/" menu is only a convenience: the bot works without it.
+async def _set_telegram_commands(chat: Chat) -> None:
+    if chat.telegram is None:
+        return
+    try:
+        await chat.telegram.set_commands(MENU)
+    except ChannelError:
+        logger.exception("could not set the Telegram command menu")
 
 
 # Meta checks the callback with a GET while registering, so this waits until the tunnel
