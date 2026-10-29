@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rewind.contracts import Attachment, CanonicalMessage, ChannelCapabilities, Reply
-from rewind.core.conversation import AttachmentTooLargeError
+from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
 from rewind.core.ports import BlobStore, ChannelError
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,11 @@ class WhatsAppChannel:
             return
         self._progress[(chat_id, key)] = sent + 1
         await self._message(chat_id, {"type": "text", "text": {"body": text}})
+
+    # The Cloud API ties its typing indicator to marking one received message as read, so it
+    # needs that message's id; background jobs have none. Without it, nothing is shown.
+    async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
+        return
 
     async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
         if (attachment.size_bytes or 0) > MEDIA_LIMIT_BYTES:

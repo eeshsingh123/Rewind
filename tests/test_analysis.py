@@ -1,6 +1,7 @@
+import asyncio
 import math
-from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -13,8 +14,9 @@ from rewind.adapters.storage.local_disk import LocalDiskBlobStore
 from rewind.adapters.storage.parquet_observations import ParquetObservationStore
 from rewind.adapters.storage.sql import SqlRepository
 from rewind.contracts import (
+    Attachment,
     Box,
-    Button,
+    CanonicalMessage,
     ChannelCapabilities,
     Charge,
     Entity,
@@ -22,7 +24,6 @@ from rewind.contracts import (
     Has,
     Line,
     Observation,
-    ReplyMedia,
     Requirement,
     Rule,
     RuleSpec,
@@ -37,7 +38,22 @@ from rewind.core.analysis import (
     naive_tracks,
 )
 from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, Ledger
-from rewind.core.conversation import Analyze, AnalyzeSettings, ChatRef, TurnContext
+from rewind.core.conversation import (
+    INSTRUCTIONS,
+    TURN_JOB,
+    Agent,
+    Analyze,
+    AnalyzeSettings,
+    ChatRef,
+    Conversation,
+    ConversationSettings,
+    Inbox,
+    Outbox,
+    Readings,
+    Toolbox,
+    TurnContext,
+    TurnLimits,
+)
 from rewind.core.perception import (
     STRATEGIES,
     ActivitySample,
@@ -46,8 +62,17 @@ from rewind.core.perception import (
     Planner,
     ProxyMaker,
 )
-from rewind.core.ports import JobPayload, Segmentation, Segmenter, SegmentRequest, VideoInfo
+from rewind.core.ports import (
+    JobPayload,
+    Segmentation,
+    Segmenter,
+    SegmentRequest,
+    ToolCall,
+    VideoInfo,
+    VideoToolsError,
+)
 from rewind.core.rules import RuleCompiler
+from tests.fakes import FakeChannel, ScriptedModel, completion
 
 pytestmark = pytest.mark.anyio
 
@@ -64,8 +89,15 @@ CAPABILITIES = ChannelCapabilities(max_text_chars=4096, max_media_bytes=50_000_0
 class FakeVideo:
     def __init__(self) -> None:
         self.drawn: list[tuple[Mark, ...]] = []
+        # Holds reading a video back until set, to ask for a check meanwhile.
+        self.gate: asyncio.Event | None = None
+        self.unreadable = False
 
     async def probe(self, source: Path) -> VideoInfo:
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.unreadable:
+            raise VideoToolsError("moov atom not found")
         return VideoInfo(duration_s=10.0, fps=25.0, width=1280, height=720, frame_count=250)
 
     async def make_proxy(
@@ -165,27 +197,11 @@ class Segmenters:
 
 
 @dataclass
-class Notes:
-    sent: list[tuple[str, tuple[ReplyMedia, ...], tuple[Button, ...]]] = field(
-        default_factory=list[tuple[str, tuple[ReplyMedia, ...], tuple[Button, ...]]]
-    )
-
-    async def notify(
-        self, channel: str, chat_id: str, text: str, media: tuple[ReplyMedia, ...] = (),
-        buttons: tuple[Button, ...] = (),
-    ) -> None:  # fmt: skip
-        self.sent.append((text, media, buttons))
-
-    async def progress(self, channel: str, chat_id: str, key: str, text: str) -> None:
-        pass
-
-
-@dataclass
 class Setup:
     repository: SqlRepository
     blobs: LocalDiskBlobStore
     sam: FakeSam
-    notes: Notes
+    channel: FakeChannel
     analysis: Analysis
     jobs: InProcessJobRunner
     line: Line
@@ -203,7 +219,7 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
     observations = ParquetObservationStore(blobs)
     sam = FakeSam()
     ledger = Ledger(repository, BudgetLimits(Decimal(5), Decimal(100)), clock=lambda: NOW)
-    notes = Notes()
+    channel = FakeChannel()
 
     def no_compiler(workspace_id: str) -> RuleCompiler:
         raise AssertionError("no zone needs finding in these tests")
@@ -213,11 +229,11 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
         ingest=Ingest(blobs, video, FakeActivity(), proxies, 2.0),
         planner=Planner(STRATEGIES), runner=PerceptionRunner(proxies, observations),
         observations=observations, segmenters=Segmenters(sam, ledger),
-        compiler_for=no_compiler, video=video, stills=video, clips=video, notifier=notes,
+        compiler_for=no_compiler, video=video, stills=video, clips=video,
+        notifier=Outbox({"telegram": channel}),
         settings=AnalysisSettings(fps=2.0),
     )  # fmt: skip
     jobs = InProcessJobRunner()
-    jobs.register(INGEST_JOB, analysis.handle_ingest)
     jobs.register(ANALYZE_JOB, analysis.handle_analyze)
     line = Line(id="line-1", workspace_id="ws", name="Packing line 2", created_at=NOW)
     await repository.save_line(line)
@@ -230,8 +246,8 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
     source = tmp_path / "belt.mp4"
     source.write_bytes(b"video bytes")
     await blobs.write_file("footage/f1/belt.mp4", source)
-    await analysis.handle_ingest(_payload(footage_id="f1", original_key="footage/f1/belt.mp4"))
-    yield Setup(repository, blobs, sam, notes, analysis, jobs, line, rule, video)
+    await analysis.read(_payload(footage_id="f1", original_key="footage/f1/belt.mp4"))
+    yield Setup(repository, blobs, sam, channel, analysis, jobs, line, rule, video)
     await repository.close()
 
 
@@ -274,7 +290,8 @@ async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_
     # Video follows the cartons; the label is looked for on one still, shared by both cartons.
     assert setup.sam.prompts == ["carton", "shipping label"]
     assert setup.sam.calls == calls_after_first == 2
-    summary, _, buttons = setup.notes.sent[-1]
+    done = setup.channel.sent[-1]
+    summary, buttons = done.text, done.buttons
     assert summary.startswith("Done in ")
     assert "for $0.00" in summary
     assert "Rule 1 · Every carton needs a label before it leaves." in summary
@@ -289,10 +306,7 @@ async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_
 
 
 async def test_analyze_asks_for_a_tap_above_the_threshold_and_starts_once(setup: Setup) -> None:
-    analyze = Analyze(
-        setup.repository, setup.repository, setup.analysis,
-        AnalyzeSettings(confirm_above_usd=Decimal("0.001"), daily_cap_usd=Decimal(5)),
-    )  # fmt: skip
+    analyze = _analyze(setup, Readings(), Decimal("0.001"))
     context = TurnContext("ws", ChatRef("telegram", "chat"), NOW)
 
     result = await analyze.tool().call(context, "{}")
@@ -304,3 +318,129 @@ async def test_analyze_asks_for_a_tap_above_the_threshold_and_starts_once(setup:
     assert not result.jobs
     assert [job.kind for job in first.jobs + again.jobs] == [ANALYZE_JOB]
     assert again.text.startswith("That button has expired")
+
+
+def _analyze(setup: Setup, readings: Readings, confirm_above_usd: Decimal) -> Analyze:
+    return Analyze(
+        setup.repository, setup.repository, setup.analysis, readings,
+        Outbox({"telegram": setup.channel}), setup.jobs,
+        AnalyzeSettings(confirm_above_usd=confirm_above_usd, daily_cap_usd=Decimal(5)),
+        lambda: NOW,
+    )  # fmt: skip
+
+
+@dataclass
+class Chat:
+    inbox: Inbox
+    model: ScriptedModel
+
+
+# The whole chat path: turns and ingest run as jobs, as in the app, with the line's chat bound to
+# the fixture's workspace.
+async def _chat(setup: Setup, confirm_above_usd: Decimal) -> Chat:
+    readings = Readings()
+    analyze = _analyze(setup, readings, confirm_above_usd)
+    model = ScriptedModel([])
+    conversation = Conversation(
+        repository=setup.repository, store=setup.repository, blobs=setup.blobs, jobs=setup.jobs,
+        channels={"telegram": setup.channel},
+        agent=Agent(INSTRUCTIONS, Toolbox.of([analyze.tool()]), TurnLimits()),
+        model_for=lambda workspace_id: model, readings=readings,
+        settings=ConversationSettings(frozenset(), "https://tunnel.test"), clock=lambda: NOW,
+    )  # fmt: skip
+    setup.jobs.register(TURN_JOB, conversation.handle_job)
+    setup.jobs.register(INGEST_JOB, analyze.handle_ingest)
+    await setup.repository.bind_chat(ChatRef("telegram", "chat"), "ws")
+    return Chat(Inbox(setup.repository, setup.jobs), model)
+
+
+async def _video_then_check_it(setup: Setup, chat: Chat) -> None:
+    setup.video.gate = asyncio.Event()
+    chat.model.replies = [
+        completion("", ToolCall("c1", "analyze", "{}")),
+        completion("Still reading the video; I'll check it as soon as it's ready."),
+    ]
+    video = Attachment(kind="video", ref="file-9", size_bytes=6_600_000, filename="clip.mp4")
+    await chat.inbox.receive(_message(None, "m1", attachments=(video,)))
+    await chat.inbox.receive(_message("Check it", "m2"))
+    await _until(lambda: any(s.kind == "send" for s in setup.channel.shown))
+    setup.video.gate.set()
+    await setup.jobs.drain()
+
+
+def _message(
+    text: str | None, message_id: str, attachments: tuple[Attachment, ...] = ()
+) -> CanonicalMessage:
+    return CanonicalMessage(
+        channel="telegram", message_id=message_id, chat_id="chat", sender_id="7",
+        received_at=NOW, text=text, attachments=attachments,
+    )  # fmt: skip
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    for _ in range(500):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out")
+
+
+def _ack_key(channel: FakeChannel) -> str:
+    return next(s.key for s in channel.shown if s.kind == "progress")
+
+
+async def test_a_check_asked_for_while_the_video_is_read_starts_once_it_is_ready(
+    setup: Setup,
+) -> None:
+    chat = await _chat(setup, confirm_above_usd=Decimal(1))
+
+    await _video_then_check_it(setup, chat)
+
+    state = chat.model.requests[0].messages[1].text
+    tool_result = chat.model.requests[1].messages[-1].text
+    assert "recording: clip.mp4 (being read)" in state
+    assert tool_result.startswith("NOT started yet: clip.mp4 is still being read.")
+    texts = [s.text for s in setup.channel.shown if s.kind in ("send", "progress")]
+    ack, ready = setup.channel.progress(_ack_key(setup.channel))
+    assert ack.startswith("Got the video for *Packing line 2*.")
+    assert ready.startswith("Got it: 10 s of *Packing line 2* (clip.mp4, 1280x720).")
+    assert "Checking it against 1 rule now (about $0." in ready
+    # The agent's one reply comes between the ack and the ready message; the check comes last.
+    assert texts[:3] == [
+        ack,
+        "Still reading the video; I'll check it as soon as it's ready.",
+        ready,
+    ]
+    assert texts[3].startswith("Checking *clip.mp4*")
+    assert texts[-1].startswith("Done in ")
+    assert not any("no recordings" in text for text in texts)
+
+
+async def test_a_waiting_check_above_the_threshold_asks_to_confirm_once_ready(
+    setup: Setup,
+) -> None:
+    chat = await _chat(setup, confirm_above_usd=Decimal("0.0001"))
+
+    await _video_then_check_it(setup, chat)
+
+    _, ready = setup.channel.progress(_ack_key(setup.channel))
+    assert "Checking it against 1 rule costs about $0." in ready
+    question = setup.channel.sent[-1]
+    assert question.text == "Shall I check it?"
+    assert [b.label.split(" (")[0] for b in question.buttons] == ["Check it", "Not now"]
+    assert setup.sam.calls == 0
+
+
+async def test_an_unreadable_video_turns_the_ack_into_the_failure_and_drops_the_check(
+    setup: Setup,
+) -> None:
+    chat = await _chat(setup, confirm_above_usd=Decimal(1))
+    setup.video.unreadable = True
+
+    await _video_then_check_it(setup, chat)
+
+    assert setup.channel.progress(_ack_key(setup.channel))[1] == (
+        "I couldn't read that video. Is it a normal MP4 or MOV file? So I didn't check it."
+    )
+    assert setup.channel.sent[-1].text.startswith("I couldn't read that video.")
+    assert setup.sam.calls == 0

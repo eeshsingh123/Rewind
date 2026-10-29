@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import hashlib
 import logging
@@ -55,6 +56,7 @@ from rewind.core.perception import (
 )
 from rewind.core.ports import (
     BlobStore,
+    ChannelError,
     ConceptPrompt,
     JobPayload,
     Repository,
@@ -85,6 +87,7 @@ ANALYZE_JOB = "analyze"
 _SPANS = TypeAdapter(tuple[TimeSpan, ...])
 # Estimates price frames only; the prompt is never sent.
 _NO_PROMPT = ConceptPrompt("estimate")
+PROGRESS_EVERY_S = 30.0
 
 
 class Notifier(Protocol):
@@ -144,6 +147,16 @@ class Clip:
 
 
 @dataclass(frozen=True, slots=True)
+class Read:
+    line: Line
+    footage: Footage
+    # What arrived and where something moves, in the person's words.
+    summary: str
+    # What the person can do next with the line's rules as they are.
+    next_step: str
+
+
+@dataclass(frozen=True, slots=True)
 class Checked:
     line: Line
     outcomes: tuple[RuleOutcome, ...]
@@ -187,46 +200,39 @@ class Analysis:
         self._settings = settings
         self._parts = PartLooker(blobs, observations, stills)
 
-    async def handle_ingest(self, payload: JobPayload) -> None:
-        channel, chat_id = str(payload["channel"]), str(payload["chat_id"])
+    # Reads a received video and saves it as footage; None when its line is gone.
+    async def read(self, payload: JobPayload) -> Read | None:
         line = await self._repository.get_line(str(payload["line_id"]))
         if line is None:
-            return
+            return None
         drawn = tuple(zone for zone in line.zones if zone.source == "drawn")
-        try:
-            ingested = await self._ingest.ingest(
-                str(payload["footage_id"]), line.id, str(payload["original_key"]), drawn
-            )
-        except VideoToolsError:
-            logger.exception("ingest failed")
-            await self._notifier.notify(
-                channel, chat_id, "I couldn't read that video. Is it a normal MP4 or MOV file?"
-            )
-            return
+        ingested = await self._ingest.ingest(
+            str(payload["footage_id"]), line.id, str(payload["original_key"]), drawn
+        )
         footage = ingested.footage
         await self._blobs.write(_spans_key(footage.id), _SPANS.dump_json(ingested.active_spans))
         await self._repository.save_footage(footage)
         moving = sum(span.end - span.start for span in ingested.active_spans)
-        parts = [
+        summary = (
             f"Got it: {duration_text(footage.duration_s)} of *{line.name}* "
             f"({footage_name(footage)}, {footage.width}x{footage.height})."
-        ]
+        )
         if moving >= footage.duration_s - 1:
-            parts.append("Something moves for the whole clip.")
+            summary += " Something moves for the whole clip."
         elif moving == 0:
-            parts.append("Nothing moves in it, so there is nothing to check.")
+            summary += " Nothing moves in it, so there is nothing to check."
         else:
-            parts.append(f"Something moves for {duration_text(moving)}; I'll only check that.")
+            summary += f" Something moves for {duration_text(moving)}; I'll only check that."
         rules = [rule for rule in await self._repository.rules(line.id) if rule.active]
         if rules:
             count = f"{len(rules)} {plural('rule', len(rules))}"
-            parts.append(f"\n\nThis line has {count}. Ask me to check it.")
+            next_step = f"This line has {count}. Ask me to check it."
         else:
-            parts.append(
-                "\n\nThis line has no rules yet. Tell me what every item must have or do, "
+            next_step = (
+                "This line has no rules yet. Tell me what every item must have or do, "
                 "one sentence per rule."
             )
-        await self._notifier.notify(channel, chat_id, " ".join(parts).replace(" \n", "\n"))
+        return Read(line, footage, summary, next_step)
 
     async def estimate(
         self, workspace_id: str, line: Line, footage: Sequence[Footage], rules: Sequence[Rule]
@@ -269,9 +275,12 @@ class Analysis:
                 continue
             name = footage_name(footage)
             of = f" ({index} of {len(footage_ids)})" if len(footage_ids) > 1 else ""
-            await self._notifier.progress(channel, chat_id, job_id, f"Checking *{name}*{of}…")
+            progress = _Progress(
+                self._notifier, channel, chat_id, job_id, f"Checking *{name}*{of}…"
+            )
             try:
-                checked = await self._check(line, footage, rules, numbers, scope)
+                async with progress:
+                    checked = await self._check(line, footage, rules, numbers, scope)
             except BudgetExceededError as error:
                 sections.append(f"I stopped before *{name}*: {error}.")
                 break
@@ -471,6 +480,41 @@ class Analysis:
 
 
 _MARKS = TypeAdapter(ProofMarks)
+
+
+# A check can take minutes, so its progress message says how long it has run, every half
+# minute. Only a cue: if the chat refuses an update, the check goes on.
+class _Progress:
+    def __init__(self, notifier: Notifier, channel: str, chat_id: str, key: str, text: str) -> None:
+        self._notifier = notifier
+        self._channel = channel
+        self._chat_id = chat_id
+        self._key = key
+        self._text = text
+        self._task: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> None:
+        await self._show(self._text)
+        self._task = asyncio.create_task(self._tick())
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            await asyncio.wait([self._task])
+
+    async def _tick(self) -> None:
+        started = time.monotonic()
+        while True:
+            await asyncio.sleep(PROGRESS_EVERY_S)
+            elapsed = duration_text(time.monotonic() - started)
+            try:
+                await self._show(f"{self._text} {elapsed} so far.")
+            except ChannelError:
+                logger.warning("could not update progress in chat %s", self._chat_id, exc_info=True)
+                return
+
+    async def _show(self, text: str) -> None:
+        await self._notifier.progress(self._channel, self._chat_id, self._key, text)
 
 
 def _footage_summary(footage: Footage, checked: Checked) -> str:

@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from rewind.contracts import Footage, Line, Rule
 from rewind.core.analysis import duration_text, footage_name
@@ -21,6 +21,9 @@ the check or offers buttons to confirm. Never claim a check has started unless t
 - For footage over the chat's size limit, or when someone asks, call upload_link.
 - For results, call violations; to show the proof of one, call get_clip with its number.
 - Results arrive in this chat on their own when a check finishes; you do not need to wait.
+- A recording marked (being read) has arrived and is still being prepared. Never say there \
+is no footage while one is being read. To check it, call analyze as usual: the check then \
+starts by itself once the recording is ready.
 
 How you write:
 - Short and plain, like a helpful colleague on chat. No headings and no tables.
@@ -32,20 +35,24 @@ How you write:
 
 def workspace_state(
     lines: Sequence[Line],
-    rules: dict[str, tuple[Rule, ...]],
-    footage: dict[str, tuple[Footage, ...]],
+    rules: Mapping[str, tuple[Rule, ...]],
+    footage: Mapping[str, tuple[Footage, ...]],
+    reading: Mapping[str, tuple[str, ...]],
 ) -> str:
     if not lines:
         return "This workspace has no lines yet. Ask for a line name before anything else."
     parts = ["Lines in this workspace (the last one is the default):"]
     for line in lines:
         line_rules = rules.get(line.id, ())
-        parts.append(
-            f"- {line.name}: {len(line_rules)} rules, {len(footage.get(line.id, ()))} recordings"
-        )
+        recordings = footage.get(line.id, ())
+        being_read = reading.get(line.id, ())
+        counts = f"{len(line_rules)} rules, {len(recordings)} recordings"
+        if being_read:
+            counts += f", {len(being_read)} being read"
+        parts.append(f"- {line.name}: {counts}")
         parts += [f"  rule {index}: {rule.text}" for index, rule in enumerate(line_rules, 1)]
         parts += [
-            f"  recording: {footage_name(f)} ({duration_text(f.duration_s)})"
-            for f in footage.get(line.id, ())
+            f"  recording: {footage_name(f)} ({duration_text(f.duration_s)})" for f in recordings
         ]
+        parts += [f"  recording: {name} (being read)" for name in being_read]
     return "\n".join(parts)

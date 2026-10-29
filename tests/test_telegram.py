@@ -87,6 +87,14 @@ async def test_progress_edits_one_message_in_place() -> None:
     assert sent[1][1]["message_id"] == 1
 
 
+async def test_activity_is_a_chat_action() -> None:
+    sent: list[tuple[str, dict[str, Any]]] = []
+
+    await _channel(sent).show_activity("42", "upload_video")
+
+    assert sent == [("sendChatAction", {"chat_id": "42", "action": "upload_video"})]
+
+
 async def test_a_video_over_20_mb_is_refused_before_any_call(tmp_path: Path) -> None:
     sent: list[tuple[str, dict[str, Any]]] = []
     big = Attachment(kind="video", ref="file", size_bytes=21 * 1024 * 1024)

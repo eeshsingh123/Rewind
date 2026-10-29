@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import re
 import secrets
 import tempfile
 import uuid
+from collections import defaultdict
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -12,8 +14,9 @@ from rewind.contracts import Attachment, CanonicalMessage, Reply
 from rewind.core.analysis import INGEST_JOB
 from rewind.core.budget import BudgetExceededError
 from rewind.core.conversation.agent import Agent, AgentReply
-from rewind.core.conversation.channel import ChatChannel
+from rewind.core.conversation.channel import ACTIVITY_EVERY_S, Activity, ChatChannel
 from rewind.core.conversation.prompt import workspace_state
+from rewind.core.conversation.readings import Reading, Readings
 from rewind.core.conversation.store import ChatRef, ConversationStore, HistoryEntry
 from rewind.core.conversation.tools import ToolError, TurnContext
 from rewind.core.conversation.workspace_tools import UPLOAD_TOKEN, make_upload_link, resolve_line
@@ -53,6 +56,15 @@ class ConversationSettings:
     public_base_url: str
     upload_ttl: timedelta = timedelta(hours=24)
     link_ttl: timedelta = timedelta(minutes=10)
+    activity_every_s: float = ACTIVITY_EVERY_S
+
+
+@dataclass(frozen=True, slots=True)
+class Received:
+    # How the history and the agent see the attachment.
+    note: str
+    # What the person was told about it, already sent.
+    said: str
 
 
 class Inbox:
@@ -78,6 +90,7 @@ class Conversation:
         channels: Mapping[str, ChatChannel],
         agent: Agent,
         model_for: Callable[[str], LanguageModel],
+        readings: Readings,
         settings: ConversationSettings,
         clock: Callable[[], datetime],
         commands: Mapping[str, Command] | None = None,
@@ -89,31 +102,45 @@ class Conversation:
         self._channels = channels
         self._agent = agent
         self._model_for = model_for
+        self._readings = readings
         self._settings = settings
         self._clock = clock
         self._commands: dict[str, Command] = {"/link": self._link, **(commands or {})}
+        # One chat's messages are answered in the order they came, so a "check it" sent right
+        # after a video sees that video; other chats are answered alongside.
+        self._turns: defaultdict[ChatRef, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def handle_job(self, payload: JobPayload) -> None:
         await self.handle(CanonicalMessage.model_validate(payload["message"]))
 
     async def handle(self, message: CanonicalMessage) -> None:
         chat = ChatRef(message.channel, message.chat_id)
-        if not _allowed(self._settings.allowed_senders, message):
-            await self.send(chat, AgentReply(NOT_ALLOWED))
-            return
+        async with self._turns[chat]:
+            if not _allowed(self._settings.allowed_senders, message):
+                await self.send(chat, AgentReply(NOT_ALLOWED))
+                return
+            channel = self._channels[chat.channel]
+            async with Activity(channel, chat.chat_id, self._settings.activity_every_s) as shown:
+                reply = await self._reply(chat, message)
+                if reply.media:
+                    await shown.show("upload_video")
+                else:
+                    await shown.stop()
+                await self.send(chat, reply)
+            for job in reply.jobs:
+                await self._jobs.submit(job.kind, job.payload)
+
+    async def _reply(self, chat: ChatRef, message: CanonicalMessage) -> AgentReply:
         context = TurnContext(await self._workspace(chat), chat, self._clock())
         try:
-            reply = await self._answer(context, message)
+            return await self._answer(context, message)
         except LanguageModelError:
             logger.exception("language model failed for %s", chat)
-            reply = AgentReply(
+            return AgentReply(
                 "I couldn't reach the language model just now. Try again in a minute."
             )
         except BudgetExceededError as error:
-            reply = AgentReply(f"I've stopped making paid calls: {error}.")
-        await self.send(chat, reply)
-        for job in reply.jobs:
-            await self._jobs.submit(job.kind, job.payload)
+            return AgentReply(f"I've stopped making paid calls: {error}.")
 
     # The line name an upload link is for, without using the link up.
     async def upload_target(self, token: str) -> str | None:
@@ -128,13 +155,19 @@ class Conversation:
         if payload is None:
             return False
         footage_id = uuid.uuid4().hex
-        original_key = f"footage/{footage_id}/{_safe_name(filename, self._clock())}"
+        name = _safe_name(filename, self._clock())
+        original_key = f"footage/{footage_id}/{name}"
         await self._blobs.write_file(original_key, source)
-        await self._jobs.submit(
-            INGEST_JOB, {**payload, "footage_id": footage_id, "original_key": original_key}
-        )
+        self._readings.start(Reading(footage_id, str(payload["line_id"]), name))
         chat = ChatRef(str(payload["channel"]), str(payload["chat_id"]))
-        await self.send(chat, AgentReply(f"Upload finished: *{filename}*. I'm reading it now."))
+        await self._channels[chat.channel].show_progress(
+            chat.chat_id, footage_id, f"Upload finished: *{filename}*. I'm reading it now."
+        )
+        await self._jobs.submit(
+            INGEST_JOB,
+            {**payload, "footage_id": footage_id, "original_key": original_key,
+             "progress_key": footage_id},
+        )  # fmt: skip
         return True
 
     async def send(self, chat: ChatRef, reply: AgentReply) -> None:
@@ -154,13 +187,21 @@ class Conversation:
         handler = self._commands.get(command.lower())
         if handler is not None:
             return await handler(context, argument.strip())
-        notes: list[str] = []
-        for attachment in message.attachments:
-            notes.append(await self._receive_attachment(context, message.channel, attachment))
+        received = [
+            await self._receive_attachment(context, message.channel, attachment)
+            for attachment in message.attachments
+        ]
+        notes = "\n".join(f"[{r.note}]" for r in received)
         if not text:
-            return AgentReply("\n\n".join(notes))
+            # Each attachment was answered as it came; the history still needs to know of it.
+            await self._store.append_history(context.chat, HistoryEntry("user", notes), context.now)
+            said = "\n\n".join(r.said for r in received)
+            await self._store.append_history(
+                context.chat, HistoryEntry("assistant", said), self._clock()
+            )
+            return AgentReply("")
         if notes:
-            text = "\n".join(f"[{note}]" for note in notes) + "\n" + text
+            text = f"{notes}\n{text}"
         return await self._turn(context, text)
 
     async def _turn(self, context: TurnContext, text: str) -> AgentReply:
@@ -170,7 +211,12 @@ class Conversation:
             for line in lines
         }
         footage = {line.id: await self._repository.line_footage(line.id) for line in lines}
-        state = workspace_state(sorted(lines, key=lambda line: line.created_at), rules, footage)
+        reading = {
+            line.id: tuple(r.name for r in self._readings.of_line(line.id)) for line in lines
+        }
+        state = workspace_state(
+            sorted(lines, key=lambda line: line.created_at), rules, footage, reading
+        )
         history = await self._store.history(context.chat, HISTORY_TURNS)
         reply = await self._agent.run(
             self._model_for(context.workspace_id), context, state, history, text
@@ -183,33 +229,56 @@ class Conversation:
 
     async def _receive_attachment(
         self, context: TurnContext, channel_name: str, attachment: Attachment
-    ) -> str:
+    ) -> Received:
+        chat = context.chat
         if attachment.kind != "video":
-            return "I can only check videos. Send the footage as a video file."
+            said = "I can only check videos. Send the footage as a video file."
+            await self.send(chat, AgentReply(said))
+            return Received("sent a file that is not a video", said)
         try:
             line = await resolve_line(self._repository, context.workspace_id, None)
         except ToolError:
-            return "Tell me the name of the line first, then send the footage again."
+            said = "Tell me the name of the line first, then send the footage again."
+            await self.send(chat, AgentReply(said))
+            return Received("sent a video before any line existed", said)
         footage_id = uuid.uuid4().hex
         name = _safe_name(attachment.filename, context.now)
+        channel = self._channels[channel_name]
+        # Said before the download, which can take a while. The ingest job edits this message
+        # into its result, so the person sees one message that moves on.
+        said = (
+            f"Got the video for *{line.name}*. I'm reading it now and will tell you here when "
+            "it's ready."
+        )
+        self._readings.start(Reading(footage_id, line.id, name))
+        await channel.show_progress(chat.chat_id, footage_id, said)
         original_key = f"footage/{footage_id}/{name}"
         try:
             with tempfile.TemporaryDirectory() as workdir:
                 local = Path(workdir) / name
-                await self._channels[channel_name].fetch_attachment(attachment, local)
+                await channel.fetch_attachment(attachment, local)
                 await self._blobs.write_file(original_key, local)
         except AttachmentTooLargeError as error:
+            self._readings.finish(footage_id)
             url = await make_upload_link(
                 self._store, self._settings.public_base_url, self._settings.upload_ttl,
                 context, line,
             )  # fmt: skip
             hours = int(self._settings.upload_ttl.total_seconds() // 3600)
-            return (
+            said = (
                 f"That file is too big for me to fetch here (the limit is "
                 f"{error.limit_bytes // 1_000_000} MB). Upload it with this link instead:\n"
                 f"{url}\n\n"
                 f"It works once, for {hours} hours, and goes straight to *{line.name}*."
             )
+            await channel.show_progress(chat.chat_id, footage_id, said)
+            return Received(f"sent a video too big to fetch here: {name}", said)
+        except ChannelError:
+            logger.exception("could not fetch a video from %s", channel_name)
+            self._readings.finish(footage_id)
+            said = "I couldn't download that video. Please send it again."
+            await channel.show_progress(chat.chat_id, footage_id, said)
+            return Received(f"sent a video that could not be downloaded: {name}", said)
         await self._jobs.submit(
             INGEST_JOB,
             {
@@ -217,14 +286,12 @@ class Conversation:
                 "line_id": line.id,
                 "footage_id": footage_id,
                 "original_key": original_key,
-                "channel": context.chat.channel,
-                "chat_id": context.chat.chat_id,
+                "channel": chat.channel,
+                "chat_id": chat.chat_id,
+                "progress_key": footage_id,
             },
         )
-        return (
-            f"Got the video for *{line.name}*. I'm reading it now and will tell you when "
-            "it's ready."
-        )
+        return Received(f"sent a video: {name} for *{line.name}*", said)
 
     async def _workspace(self, chat: ChatRef) -> str:
         workspace_id = await self._store.workspace_for_chat(chat)

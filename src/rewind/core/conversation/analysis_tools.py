@@ -1,9 +1,11 @@
+import logging
 import secrets
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 
 from rewind.contracts import (
     Button,
@@ -23,14 +25,18 @@ from rewind.core.analysis import (
     ANALYZE_JOB,
     Analysis,
     Clip,
+    Notifier,
+    Read,
     clip_buttons,
     duration_text,
     footage_name,
+    plural,
     violation_line,
 )
 from rewind.core.budget import BudgetExceededError
 from rewind.core.conversation.agent import AgentReply
 from rewind.core.conversation.conversation import Command
+from rewind.core.conversation.readings import Reading, Readings, WaitingCheck
 from rewind.core.conversation.store import ConversationStore
 from rewind.core.conversation.tools import (
     Job,
@@ -41,8 +47,10 @@ from rewind.core.conversation.tools import (
     TurnContext,
 )
 from rewind.core.conversation.workspace_tools import resolve_line
-from rewind.core.ports import JobPayload, Repository
+from rewind.core.ports import JobPayload, JobRunner, Repository, VideoToolsError
 from rewind.core.rules import RuleCompileError, RuleCompiler, normalize, zone_keys
+
+logger = logging.getLogger(__name__)
 
 CONFIRM_TOKEN = "analyze"
 CONFIRM_TTL = timedelta(hours=1)
@@ -175,18 +183,36 @@ def add_rule(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Offer:
+    # Facts for the model to word the reply from.
+    facts: tuple[str, ...]
+    total_usd: Decimal
+    outcome: Literal["started", "confirm", "over_limit"]
+    buttons: tuple[Button, ...] = ()
+    jobs: tuple[Job, ...] = ()
+
+
 class Analyze:
     def __init__(
         self,
         repository: Repository,
         store: ConversationStore,
         analysis: Analysis,
+        readings: Readings,
+        notifier: Notifier,
+        jobs: JobRunner,
         settings: AnalyzeSettings,
+        clock: Callable[[], datetime],
     ) -> None:
         self._repository = repository
         self._store = store
         self._analysis = analysis
+        self._readings = readings
+        self._notifier = notifier
+        self._jobs = jobs
         self._settings = settings
+        self._clock = clock
 
     def tool(self) -> ToolSpec[RecordingArguments]:
         return ToolSpec(
@@ -210,12 +236,90 @@ class Analyze:
             await self._store.take_token(CONFIRM_TOKEN, argument, context.now)
         return AgentReply("OK, I won't check it.")
 
+    # The ingest job. Its result replaces the "reading it now" message, and a check asked for
+    # while the video was being read starts here, under the same cost rule as any other.
+    async def handle_ingest(self, payload: JobPayload) -> None:
+        channel, chat_id = str(payload["channel"]), str(payload["chat_id"])
+        key = str(payload["progress_key"])
+        failed = False
+        try:
+            read = await self._analysis.read(payload)
+        except VideoToolsError:
+            logger.exception("ingest failed")
+            read, failed = None, True
+        finally:
+            waiting = self._readings.finish(str(payload["footage_id"]))
+        if failed:
+            text = "I couldn't read that video. Is it a normal MP4 or MOV file?"
+            if waiting is not None:
+                text += " So I didn't check it."
+            await self._notifier.progress(channel, chat_id, key, text)
+            return
+        if read is None:
+            return
+        if waiting is None:
+            text = f"{read.summary}\n\n{read.next_step}"
+            await self._notifier.progress(channel, chat_id, key, text)
+            return
+        await self._start_waiting(read, waiting, key)
+
+    async def _start_waiting(self, read: Read, waiting: WaitingCheck, key: str) -> None:
+        chat = waiting.chat
+        rules = tuple(r for r in await self._repository.rules(read.line.id) if r.active)
+        if not rules:
+            text = f"{read.summary}\n\n{read.next_step}"
+            await self._notifier.progress(chat.channel, chat.chat_id, key, text)
+            return
+        footage: tuple[Footage, ...] = (read.footage,)
+        if (waiting.recording or "").strip().casefold() == ALL:
+            footage = await self._repository.line_footage(read.line.id)
+        context = TurnContext(waiting.workspace_id, chat, self._clock())
+        offer = await self._offer(context, read.line, footage, rules)
+        against = f"against {len(rules)} {plural('rule', len(rules))}"
+        match offer.outcome:
+            case "started":
+                next_step = (
+                    f"Checking it {against} now (about ${offer.total_usd:.2f}). "
+                    "I'll message you here when it's done."
+                )
+            case "confirm":
+                next_step = f"Checking it {against} costs about ${offer.total_usd:.2f}."
+            case "over_limit":
+                next_step = (
+                    f"Checking it would cost about ${offer.total_usd:.2f}, which passes today's "
+                    f"limit of ${self._settings.daily_cap_usd:.2f}, so I didn't start it."
+                )
+        text = f"{read.summary}\n\n{next_step}"
+        await self._notifier.progress(chat.channel, chat.chat_id, key, text)
+        if offer.buttons:
+            await self._notifier.notify(
+                chat.channel, chat.chat_id, "Shall I check it?", buttons=offer.buttons
+            )
+        for job in offer.jobs:
+            await self._jobs.submit(job.kind, job.payload)
+
     async def _run(self, context: TurnContext, arguments: RecordingArguments) -> ToolResult:
         line = await resolve_line(self._repository, context.workspace_id, arguments.line)
         rules = tuple(r for r in await self._repository.rules(line.id) if r.active)
         if not rules:
             raise ToolError(f"line {line.name!r} has no rules yet; add one first")
+        reading = _reading_asked_for(self._readings.of_line(line.id), arguments.recording)
+        if reading is not None:
+            waiting = WaitingCheck(context.workspace_id, context.chat, arguments.recording)
+            self._readings.wait(reading.footage_id, waiting)
+            return ToolResult(
+                f"NOT started yet: {reading.name} is still being read. The check starts by "
+                "itself as soon as it is ready (a confirm button comes first if it costs more "
+                f"than ${self._settings.confirm_above_usd:.2f}). Tell the person so in one "
+                "short sentence."
+            )
         footage = await resolve_footage(self._repository, line, arguments.recording)
+        offer = await self._offer(context, line, footage, rules)
+        return ToolResult("\n".join(offer.facts), buttons=offer.buttons, jobs=offer.jobs)
+
+    async def _offer(
+        self, context: TurnContext, line: Line, footage: Sequence[Footage], rules: Sequence[Rule]
+    ) -> Offer:
         estimate = await self._analysis.estimate(context.workspace_id, line, footage, rules)
         start_of_day = context.now.replace(hour=0, minute=0, second=0, microsecond=0)
         spent = await self._repository.spent_usd(start_of_day, context.workspace_id)
@@ -247,23 +351,32 @@ class Analyze:
         }
         if spent + total > self._settings.daily_cap_usd:
             facts.append("NOT started: it would pass today's limit")
-            return ToolResult("\n".join(facts))
+            return Offer(tuple(facts), total, "over_limit")
         if total <= self._settings.confirm_above_usd:
             facts.append(
                 f"started at once (under ${self._settings.confirm_above_usd:.2f}); "
                 "results will arrive in this chat"
             )
-            return ToolResult("\n".join(facts), jobs=(Job(ANALYZE_JOB, payload),))
+            return Offer(tuple(facts), total, "started", jobs=(Job(ANALYZE_JOB, payload),))
         token = secrets.token_urlsafe(12)
         await self._store.put_token(CONFIRM_TOKEN, token, dict(payload), context.now + CONFIRM_TTL)
         facts.append("NOT started yet: waiting for the person to tap the confirm button")
-        return ToolResult(
-            "\n".join(facts),
-            buttons=(
-                Button(label=f"Check it (${total:.2f})", value=f"/confirm {token}"),
-                Button(label="Not now", value=f"/cancel {token}"),
-            ),
+        buttons = (
+            Button(label=f"Check it (${total:.2f})", value=f"/confirm {token}"),
+            Button(label="Not now", value=f"/cancel {token}"),
         )
+        return Offer(tuple(facts), total, "confirm", buttons=buttons)
+
+
+# The recording a check asks for, if it is one still being read: the newest by default.
+def _reading_asked_for(reading: Sequence[Reading], recording: str | None) -> Reading | None:
+    if not reading:
+        return None
+    wanted = (recording or "").strip().casefold()
+    if not wanted or wanted == ALL:
+        return reading[-1]
+    matches = [r for r in reading if wanted in r.name.casefold()]
+    return matches[-1] if matches else None
 
 
 class Findings:

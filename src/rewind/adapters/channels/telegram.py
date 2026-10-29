@@ -12,7 +12,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rewind.contracts import Attachment, Button, CanonicalMessage, ChannelCapabilities, Reply
-from rewind.core.conversation import AttachmentTooLargeError
+from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
 from rewind.core.ports import BlobStore, ChannelError
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,9 @@ class TelegramChannel:
             return
         sent = await self._call("sendMessage", _text_body(chat_id, _html(text), None))
         self._progress[(chat_id, key)] = int(sent["message_id"])
+
+    async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
+        await self._call("sendChatAction", {"chat_id": chat_id, "action": kind})
 
     async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
         if (attachment.size_bytes or 0) > FETCH_LIMIT_BYTES:

@@ -25,6 +25,7 @@ from rewind.core.conversation import (
     Findings,
     Inbox,
     Outbox,
+    Readings,
     Toolbox,
     TurnLimits,
     add_rule,
@@ -32,6 +33,7 @@ from rewind.core.conversation import (
     list_rules,
     rule_commands,
     upload_link,
+    with_activity,
 )
 from rewind.core.ports import LanguageModel
 from rewind.core.rules import RuleCompiler
@@ -87,6 +89,7 @@ def build_chat(
 
     # D-12: 8 GB of RAM, so heavy jobs run one at a time.
     jobs = InProcessJobRunner({INGEST_JOB: 1, ANALYZE_JOB: 1})
+    outbox = Outbox(channels)
     analysis = Analysis(
         repository=repository,
         blobs=blobs,
@@ -99,12 +102,13 @@ def build_chat(
         video=perception.video_tools,
         stills=perception.video_tools,
         clips=OpenCvProofClips(),
-        notifier=Outbox(channels),
+        notifier=outbox,
         settings=AnalysisSettings(fps=settings.track_fps),
     )
+    readings = Readings()
     analyze = Analyze(
-        repository, repository, analysis,
-        AnalyzeSettings(settings.confirm_above_usd, settings.workspace_daily_cap_usd),
+        repository, repository, analysis, readings, outbox, jobs,
+        AnalyzeSettings(settings.confirm_above_usd, settings.workspace_daily_cap_usd), _now,
     )  # fmt: skip
     findings = Findings(repository, analysis, capabilities)
     conversation_settings = ConversationSettings(
@@ -135,6 +139,7 @@ def build_chat(
         channels=channels,
         agent=Agent(INSTRUCTIONS, toolbox, TurnLimits()),
         model_for=model_for,
+        readings=readings,
         settings=conversation_settings,
         clock=_now,
         commands={
@@ -145,6 +150,6 @@ def build_chat(
         },
     )
     jobs.register(TURN_JOB, conversation.handle_job)
-    jobs.register(INGEST_JOB, analysis.handle_ingest)
-    jobs.register(ANALYZE_JOB, analysis.handle_analyze)
+    jobs.register(INGEST_JOB, analyze.handle_ingest)
+    jobs.register(ANALYZE_JOB, with_activity(outbox, analysis.handle_analyze))
     return Chat(conversation, Inbox(repository, jobs), jobs, telegram, whatsapp)
