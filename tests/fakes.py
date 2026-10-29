@@ -1,5 +1,4 @@
 import json
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -7,16 +6,9 @@ from typing import NamedTuple
 
 import httpx
 
-from rewind.contracts import Attachment, ChannelCapabilities, Charge, Observation, Reply
+from rewind.contracts import Attachment, ChannelCapabilities, Charge, Reply
 from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
-from rewind.core.ports import (
-    ChannelError,
-    Completion,
-    CompletionRequest,
-    Segmentation,
-    SegmentRequest,
-    ToolCall,
-)
+from rewind.core.ports import Completion, CompletionRequest, ToolCall
 
 
 class FakeBlobStore:
@@ -40,63 +32,6 @@ class FakeBlobStore:
 
     def signed_url(self, key: str, expires_in_s: int) -> str:
         return f"https://blobs.test/{key}"
-
-
-def charge(unit: str, quantity: int = 100) -> Charge:
-    return Charge(
-        provider="fake", model="fake-1", unit=unit, quantity=quantity, usd=Decimal("0.01")
-    )
-
-
-class FakeLanguageModel:
-    def __init__(self, replies: list[str | Exception], model_version: str = "fake-1") -> None:
-        self.replies = replies
-        self.requests: list[CompletionRequest] = []
-        self._model_version = model_version
-
-    @property
-    def model_version(self) -> str:
-        return self._model_version
-
-    async def complete(self, request: CompletionRequest) -> Completion:
-        self.requests.append(request)
-        reply = self.replies.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
-        return Completion(text=reply, tool_calls=(), charges=(charge("output_token"),))
-
-
-class FakeSegmenter:
-    def __init__(self, find: Callable[[SegmentRequest], tuple[Observation, ...]]) -> None:
-        self.find = find
-        self.requests: list[SegmentRequest] = []
-
-    @property
-    def model_version(self) -> str:
-        return "fake-sam"
-
-    @property
-    def max_frames(self) -> int:
-        return 15_000
-
-    @property
-    def max_prompt_objects(self) -> int:
-        return 16
-
-    @property
-    def max_tracked_objects(self) -> int | None:
-        return None
-
-    @property
-    def min_billed_frames(self) -> int:
-        return 1
-
-    def estimate(self, request: SegmentRequest) -> tuple[Charge, ...]:
-        return (charge("image", 1),)
-
-    async def segment(self, request: SegmentRequest) -> Segmentation:
-        self.requests.append(request)
-        return Segmentation(observations=self.find(request), charges=(charge("image", 1),))
 
 
 RECORDINGS = Path(__file__).parent / "recordings"
@@ -156,7 +91,6 @@ class FakeChannel:
     # Everything the chat showed, in order.
     shown: list[Shown] = field(default_factory=list[Shown])
     fetch_limit: int = 20_000_000
-    activity_fails: bool = False
 
     @property
     def capabilities(self) -> ChannelCapabilities:
@@ -172,8 +106,6 @@ class FakeChannel:
 
     async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
         self.shown.append(Shown("activity", chat_id, kind))
-        if self.activity_fails:
-            raise ChannelError("telegram sendChatAction: Too Many Requests")
 
     async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
         if (attachment.size_bytes or 0) > self.fetch_limit:
