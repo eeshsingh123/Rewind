@@ -1,4 +1,4 @@
-# Live smoke for T3: compiles the example sentences against real Muse Spark. Not run in CI.
+# Live smoke of the rule compiler: compiles the example sentences against real Muse Spark.
 # uv run python scripts/smoke_rules.py [--record tests/recordings/muse/compile_examples.json]
 import argparse
 import asyncio

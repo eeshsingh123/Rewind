@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class InProcessJobRunner:
-    # A limit per kind keeps heavy jobs one at a time on an 8 GB machine (D-12).
+    # A limit per kind keeps heavy jobs one at a time on an 8 GB machine.
     def __init__(self, limits: Mapping[str, int] | None = None) -> None:
         self._handlers: dict[str, JobHandler] = {}
         self._slots = {kind: asyncio.Semaphore(n) for kind, n in (limits or {}).items()}

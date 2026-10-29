@@ -1,4 +1,4 @@
-# Starts a cloudflared quick tunnel, then the app with REWIND_PUBLIC_BASE_URL set to it (D-12).
+# Starts a cloudflared quick tunnel, then the app with REWIND_PUBLIC_BASE_URL set to it.
 # The quick-tunnel URL changes on every start, so nobody has to copy it by hand. Usage:
 #   uv run python scripts/serve_live.py [--cloudflared PATH] [--port 8000]
 

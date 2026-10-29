@@ -38,7 +38,7 @@ class MetaVideoSegmenter:
     def max_prompt_objects(self) -> int:
         return 16
 
-    # S0 and the stock conveyor clip: after 16 object ids, a request finds no new objects.
+    # Seen in the API checks and on the stock clip: after 16 object ids, no new objects are found.
     @property
     def max_tracked_objects(self) -> int | None:
         return 16

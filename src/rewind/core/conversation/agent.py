@@ -24,7 +24,7 @@ type OnTool = Callable[[str], Awaitable[None]]
 
 @dataclass(frozen=True, slots=True)
 class TurnLimits:
-    # D-7: a turn can never loop or spend without bound.
+    # A turn can never loop or spend without bound.
     max_tool_calls: int = 6
     max_output_tokens: int = 4000
     effort: Effort = "low"

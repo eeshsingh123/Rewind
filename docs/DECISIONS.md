@@ -1,114 +1,55 @@
 # Decisions
 
-Only decisions that still guide upcoming work keep their why. Everything settled and built is one line under Done. Numbers are never reused.
+Why things are the way they are. Only decisions that still shape upcoming work are here; each is short. When one changes, edit it in place.
 
-## Guiding upcoming work
+## Product
 
-### D-1 Product: retroactive rules, with packing as the lead story — accepted (2026-10-28)
+**Rules for any camera, told through one packing story.** Plain-English rules run over footage, including footage processed before the rule existed. The pitch: a complaint comes in, a new rule runs over stored footage, and the reply says when it started, how often, and shows the clip. A shelf or dock scene appears only as a short "works here too", once the packing story works on real footage.
+Why: "ask your camera anything" builds will be common; judges remember one sharp story.
 
-Rules in plain English run over footage, including footage processed before the rule existed. The lead demo is an e-commerce carton line answering "the box arrived empty". A jar line and a warehouse dock prove it works on any line.
-Why: a generic "SAM plus an LLM watches the camera" build will be common at this hackathon. Retroactive rules with proof clips stand out, are easy to demo, and come straight from the architecture in D-2.
+**Real stock footage for the demo; the sim is frozen.** The demo and the accuracy table use real, hand-labelled stock clips. The Blender sim (`sim/`) stays as built, unused.
+Why: making the sim realistic enough for SAM cost days, and real footage convinces judges more.
 
-### D-2 Perception is separate from rules; the engine is deterministic — accepted (2026-10-28)
+**Insights are computed, then worded.** Plain queries over the events find the insights: first and last time a rule failed, bursts and the stops they line up with, downtime and pace, change from earlier in the footage. Each carries its numbers and clips. Only notable ones are sent. Muse only writes the sentence.
+Why: every finding must be provable, and an insight shown on every run gets ignored.
 
-Perception (SAM 3.1) turns footage into observations once per input and concept, and stores them. Rules are compiled into the rule language and evaluated by plain Python over the stored observations, any number of times.
-Why: this makes retroactive rules cheap, keeps decisions testable and repeatable, and avoids a vision model guessing over long videos. Muse Spark is used only to translate rules, to give a yes/no on borderline crops (D-6), and to write narratives over computed stats.
+**Chat behaviour.** Fixed commands (`/start`, `/rules`, `/clips`, `/help`) make no model call. The first message creates "Line 1"; the sample lives on its own line. A rule is a draft until the user taps "Looks right". A new video is checked against the line's rules by itself. Progress is one checklist message, edited in place. The result is a new message with the worst clip (a green clip when nothing failed). Confirmation is asked only above $0.50, and the cost shown is a floor.
 
-### D-3 Ports and adapters with one composition root — accepted (2026-10-28)
+## Architecture
 
-Package layout: `contracts` (frozen Pydantic models) ← `core` (domain logic and ports as Protocols) ← `adapters` (Meta SAM, Muse, Fireworks, local disk, Postgres, ffmpeg, in-process jobs, WhatsApp, Telegram, MCP) ← `app` (FastAPI routes, entry points, wiring). `sim` and `eval` depend only on `contracts` and `core`.
-Why: the owner's open/closed rule. A new channel, model or storage is a new adapter. import-linter enforces the direction.
+**AI perceives and translates; plain code decides.** SAM 3.1 turns footage into observations once per video and concept, and they are stored. Muse Spark turns sentences into rules. A deterministic Python engine judges the stored observations as often as needed.
+Why: re-running a rule on old footage is then cheap, and every decision is testable and repeatable.
 
-### D-4 Stack — accepted (2026-10-28)
+**Ports and adapters.** `contracts` ← `core` ← `adapters` ← `app`. A new channel, model or storage is a new adapter, never an edit to the core. import-linter enforces it. Layout is in RULES.md.
 
-Python 3.12 + uv, FastAPI under uvicorn on the owner's machine (D-12), Neon Postgres via SQLAlchemy 2.0 (Core) with Alembic, Parquet + DuckDB for observations, ffmpeg and OpenCV, HTMX + plain JS for the web, the official `mcp` SDK, Blender 4.5 LTS for the sim.
-Why: the ML and video tooling is Python-first; Postgres is safe with parallel workers and reachable from any later host.
+**Stack.** Python 3.12 with uv, FastAPI under uvicorn, SQLite now (Postgres later is a URL change), Parquet for observations, ffmpeg and OpenCV.
 
-### D-5 Storage: local disk first, behind BlobStore — revised (2026-10-28)
+**Everything runs on the owner's machine.** Blobs on local disk behind `BlobStore`; jobs run in-process. Telegram uses long polling, so it needs no public URL. WhatsApp, upload links and media URLs go through a free `cloudflared` quick tunnel (`scripts/serve_live.py`). Heavy jobs run one at a time (8 GB RAM).
+Why: no hosting account or credit needed before the deadline; a host later is new adapters only.
 
-Blobs (footage, proxies, keyframes, clips, Parquet) live on local disk behind the `BlobStore` port, under one data root from settings. Media is served by our own signed, expiring URLs. A Modal Volume or Cloudflare R2 is a later adapter.
-Why: no extra account or payment card before Nov 4, and swapping storage changes one adapter.
+**One agent behind every channel.** Each channel turns its webhooks into one message format and renders replies within its limits. One Muse agent with tools owns the conversation, so every channel gets the same answers.
 
-### D-6 Cost strategy — accepted, figures confirmed by S0 (2026-10-28)
+**Muse model: `muse-spark-1.3-contributor`.** Set by `REWIND_MUSE_MODEL`. About 12–20× cheaper than `muse-spark-1.3`, with every feature we need. Limits: Meta may train on what we send (fine for stock footage), 150 requests per minute.
 
-Prices (S0): SAM 3.1 video $0.20 per 1k frames, image $2.50 per 1k images. SAM takes one concept per request and bills every frame of the file sent (or of the tracked range for box prompts), with a 50-frame minimum per request, found or not. It has no fps setting: the proxy's fps is the cost knob. The ledger reads `usage.video_frames_processed` / `images_processed`. Muse Spark 1.3 costs $1.25 in, $0.15 cached and $4.25 out per 1M tokens; Contributor costs $0.10, $0.002 and $0.20 (D-14). Reasoning tokens bill as output and dominate small calls.
-Use video wherever possible. Each step is kept only if the eval sweep (D-10) shows it doesn't cost accuracy. In build order:
-1. Re-encode at upload to a 720p proxy at the planned fps, keeping a map back to the original time. Mandatory: the file's frame count is the bill.
-2. Skip idle footage on the CPU (MOG2 inside the zones); upload only the active spans, joined together.
-3. Rule-aware sampling planner: the compiled rules decide the concepts, regions, fps and windows.
-4. Concept scoping: track only the entity continuously; look for parts only near checkpoints.
-5. `checkpoint` strategy for flow lines: tripwire crossings found on the CPU, item identity from our own association (SAM object ids are reused across items), falling back to `dense_track` for a window when the order is ambiguous. Checkpoint windows are joined into one clip per concept, or box-prompted up to 16 objects at a time and tracked `forward`; never one request per item (the 50-frame floor makes that about 10× dearer).
-6. Coarse-to-fine: sample more densely only around borderline decisions.
-7. Muse Spark yes/no on a crop only when a decision is borderline, at `minimal` effort, within a budget per job.
-8. Cache by `(content_hash, frame_idx, concept, model_version)`. SAM results vary slightly between runs, so the cache is the source of truth for replays. A retroactive rule with a new concept runs on stored keyframes only.
-9. Crop-and-pack and self-hosted SAM: experiments only, after the hackathon unless the sweep makes a strong case.
+## Cost
 
-Estimate for one camera, an 8-hour shift, about 4,000 items and 3 concepts: about $1,080 a day with naive image calls, about $86 a day with naive video calls at 5 fps, and about $5–12 a day with every step above (entity at 2 fps on active spans about $6, parts in joined checkpoint windows about $6). Sending one request per item instead would cost about $80 a day. Muse yes/no checks on Contributor cost about $0.07 for 500.
+**Prices.** SAM 3.1 video: $0.20 per 1,000 frames; image: $2.50 per 1,000. SAM takes one concept per request, bills every frame sent, has a 50-frame minimum per request and no fps setting. Muse Contributor: $0.10 in, $0.002 cached, $0.20 out per 1M tokens.
 
-### D-7 Budget guardrails — accepted (2026-10-28)
+**How we keep it cheap.** The frames we send are the bill, so: re-encode to a 720p proxy at the planned fps; skip idle spans (frame differences inside the zones); let the rules decide which concepts and when; track the item continuously but look for parts once per item, with one image call at the moment it is judged; cache by (video, frame, concept, model) so a rerun costs $0. Never one request per item (the 50-frame minimum makes that about 10× dearer).
 
-Every paid call writes a ledger entry. A cost estimate is shown before every analysis; chat asks for confirmation above a threshold. Each workspace has a daily cap, and a global kill switch stops paid calls at $120. Webhooks are deduplicated by provider message id and acknowledged with 200 at once, with the work done in a job. The agent has caps on tool calls and tokens per turn; expensive tools are idempotent.
-Why: the owner wants no runaway spend. Webhook retries and agent loops are the usual ways costs blow up.
+**Guardrails.** Every paid call goes through the ledger and the budget guard. A cost estimate comes before every check. Each workspace has a daily cap; a global kill switch stops all paid calls at $120 (never above $140). A failed paid call still counts toward the caps. Webhooks are answered 200 at once and de-duplicated by message id. The agent has caps on tool calls and tokens per turn.
+Why: no runaway spend; webhook retries and agent loops are how costs usually blow up.
 
-### D-8 One agent behind every channel — accepted (2026-10-28)
+## How rules are judged
 
-Channel adapters turn provider webhooks into a `CanonicalMessage` and render replies within each channel's capabilities (media size limits, buttons). One agent (Muse Spark with tool calling, with a Fireworks fallback) owns the conversation. Long footage arrives through a signed upload link. The same tools are exposed over MCP. Channels for the hackathon: Telegram, WhatsApp, web, MCP. No Muse-specific work (owner: keep it centralized).
+- `at_checkpoint`: the part was seen within the 1.0 s before the checkpoint. `ever_before`: seen any time from the item's first sighting to the checkpoint.
+- "Leaves the view" is judged only when a track ends at the frame border more than 1 s before the footage ends. Items still in view, lost mid-frame, never seen whole, or not moving are not judged. Parts are checked in the last second the item was whole in frame, not the sliver at the border.
+- "At the end of the footage" judges every item as last seen. A sentence that names no moment means "leaves the view".
+- `count_at_least` counts parts in one frame. `before(a, b)` compares first sightings.
+- One violation per item per checkpoint, with the reasons joined. Rates are judged per whole minute.
+- SAM's object ids are reused across items, so item identity is our own tracking. SAM follows at most 16 objects per request; when full, the rest of the window is sent again from that frame.
+- Boxes and zones are fractions of the frame (0..1), so they survive any proxy resolution.
 
-### D-9 Simulated test bench in Blender — accepted (2026-10-28)
+## Accuracy
 
-Blender 4.5 LTS run headless with Eevee renders scenarios from YAML into a video, `ground_truth.json` and `zones.json`. All motion is keyframed, with no physics and no humans; the lines are automated (capper, labeller, taper). SimReady Warehouse-01 props (CC-BY-4.0) are downloaded selectively, and their materials are replaced with CC0 ambientCG textures and Poly Haven HDRIs. The conveyor, cartons, flaps, tape and QR labels are built from simple shapes. Renders are made to look like CCTV: blur, noise, shake, H.264 compression.
-Why: no factory access; an exact answer key; Isaac Sim needs an RTX card and is too slow to learn in time.
-Owner hardware: GTX 1650 4 GB and 8 GB RAM. This is enough for Eevee at 960×540–1280×720 with textures at 2K or smaller, rendering one job at a time. Too slow → lower the resolution or the sample count. Neither SAM nor Isaac Sim runs locally.
-
-### D-10 Evaluation is the proof — accepted (2026-10-28)
-
-Score per-item violation precision, recall and F1 (a match is the same item within ±2 s), dwell/jam timing, QR order-link accuracy, cost per 1,000 items, and latency. Sweep strategy × fps × gating to produce a cost-vs-accuracy curve. Hand-labelled stock clips are reported separately as the sim-to-real check. Never cut.
-
-### D-11 Hackathon adaptations to the build protocol — accepted (2026-10-28)
-
-Tracks run in parallel sessions, one branch and one PR each, as long as they touch different packages. Contracts change only in their own PR. The mockup stage applies only to tracks the user sees (web UI, chat flows).
-Why: about 100 focused hours remain before Nov 4, and building one track at a time would not finish.
-Sessions run on Opus 5.5 medium, except T0 and the T3 engine, which run on high because every other track builds on their contracts and design. At most two sessions run at once, to stay inside the owner's $20 plan limits.
-
-### D-12 Local-first runtime; Modal is a later deploy target — accepted (2026-10-28)
-
-Everything runs on the owner's machine: the FastAPI app under uvicorn, blobs on local disk (D-5), and background work through a `JobRunner` port with an in-process worker. Telegram uses long polling, so it needs no public URL. WhatsApp webhooks, signed upload links, and any media URL the Meta API must fetch go through a Cloudflare quick tunnel (`cloudflared`, free, no account) to localhost. Modal (Volume, jobs, web endpoint) comes back later as adapters plus one entry point in `app`, with no change to `core`.
-Why: the Modal credit has not arrived and waiting costs build days. SAM 3.1 and Muse Spark are hosted APIs, so no GPU is needed; ffmpeg, OpenCV and Blender already run locally.
-Limits: the machine must stay on during live demos; the quick-tunnel URL changes on each restart, so the WhatsApp webhook is re-registered at start-up; 8 GB RAM means one heavy job (render or analysis) at a time. If the submission needs a hosted URL, T8 picks Modal (if credit arrives) or a Docker host.
-
-### D-13 Contract conventions (T0) — accepted (2026-10-28)
-
-- Boxes, points and zones are normalized to the frame (0..1), so they survive a proxy at another resolution. A mask is an RLE of the crop under its box, which is how SAM 3.1 returns it.
-- `Observation.object_id` is the segmenter's own id, stable only while the object stays in view. Item identity is our `Track`, built by association (S0: SAM reuses ids for different cartons).
-- `Segmenter` takes one prompt (one concept, or up to 16 marked objects) and one media blob plus its time map (the footage time of each frame). It bills every frame it is sent, so the caller sends a proxy at the planned fps. Adapters return `Charge`s read from the provider's reported usage, and estimate from price, so the ledger matches the bill (D-7).
-- Contracts forbid unknown fields, so language model JSON with an invented key fails validation and is retried. Collections are tuples.
-Why: these choices are shared by T1–T5; changing one later means a contract PR that blocks those tracks.
-
-### D-14 Muse model: `muse-spark-1.3-contributor` by default — accepted (2026-10-28)
-
-The language model id is the setting `REWIND_MUSE_MODEL`, which defaults to `muse-spark-1.3-contributor`. `muse-spark-1.3` is the drop-in alternative for footage that must not be used for training; switching is a change to the setting only.
-Why: it has every feature we need (S0) and costs about 12–20× less. Limits: Meta may train on everything sent to it (fine for sim and stock footage), and it allows 150 requests per minute per team, so bursts of yes/no checks queue and back off on 429.
-
-### D-15 Perception P0 (T2) — accepted (2026-10-29)
-
-Idle skip measures frame differences inside the zones, not MOG2. The proxy for a plan is its spans joined at its fps, and its time map comes from ffmpeg, so the frames billed equal the frames mapped. There is one SAM request per (concept, fps) over every window, split only at 15,000 frames. On a partial cache hit, only the uncached frames are sent. The cache is Parquet per `(content_hash, model_version, concept)`, with a row per original-footage frame index, and empty frames are cached too. The kill switch counts all-time spend across workspaces: $120 by default, never above $140. A failed paid call keeps its estimate as an unconfirmed entry that counts toward the caps. Every paid port reaches callers only through the budget decorators.
-Why: a background model learns a busy line as background and reports it idle, and a skipped span is a missed violation. A failed call may still be billed.
-
-### D-16 Rule semantics (T3) — accepted (2026-10-29)
-
-- `at_checkpoint` means the predicate held within the 1.0 s before the checkpoint (`CHECKPOINT_WINDOW_S` in `core.rules`), so perception must sample parts in that window. `ever_before` runs from the item's first sighting to the checkpoint.
-- `exits_view` is a track's last sighting, judged only if the track ends at a frame border (within 2 % of the frame) more than 1 s before the end of the footage. Not judged: items still in view at the end, tracks that end inside the frame (lost, not gone), items never seen whole, and objects that never leave their own footprint (background). For an exit, `at_checkpoint` runs from 1 s before the last moment the item was whole in the frame up to the exit; `checks()` returns that moment as `look_at`. Revised 2026-10-29: the last second before an exit is a sliver at the border, with the label already out of frame, so 6 of 10 findings on the stock clip were labelled boxes. `end_of_footage` judges every item as last seen. A sentence that names no moment uses `exits_view`.
-- `count_at_least` counts parts seen together in one frame. `order before(a, b)` compares first sightings, and the same frame counts as in order.
-- One violation per item per checkpoint, with the reasons joined; one per dwell overstay; one per whole minute below `rate` (the tail is ignored; footage under a minute is judged pro rata). Violation ids hash (rule, footage, track, check), so a rerun upserts.
-- The compiler returns `zone_phrases` next to the `RuleSpec`, so an undrawn zone can be found by text. Compiled rules are cached by normalized text and model version. The Muse adapter sends `prompt_cache_key`: with it the compile prompt hit the cache on 15 of 16 calls, against 1 of 8 without.
-Why: the engine has to decide these, and the planner (sampling windows), T1's ground truth and T7's scoring all depend on them. Open questions are in MEMORY.md.
-
-### D-17 Perception on busy lines — accepted (2026-10-29)
-
-SAM video follows at most 16 objects per request and then finds no new ones. When a request fills up, the runner sends the rest of the window again from that frame, and on the shared frame each object keeps its id (box IoU ≥ 0.5). Parts a rule needs only at its checkpoint are looked for with one SAM image call per item at its `look_at` moment (cached under `<model>/still`). Video tracks the items, plus any part needed over time (`ever_before`, `order`).
-Why: on the stock clip all 16 label slots were used in the first frame and all box slots by 3.5 s, so later parcels were never seen. An image call found 21 labels in one frame. Cost: a busy clip pays more 50-frame requests (the stock clip went from $0.02 to $0.05), and parts cost $0.0025 per judged item.
-Limits: a frame with 16 or more matching objects stays capped (T1's S2 render has 16 "carton" objects in every frame, counting the shelves); the fix is cropping to the work area (T2 P1, `SamplingWindow.region`). A new request does not always re-detect every object it takes over, which costs recall, never precision.
-
-## Done
-
-(nothing yet)
+**The accuracy table is the proof.** Per-item precision and recall (a match is the same item within ±2 s), cost and run time, on hand-labelled real clips. Never cut.

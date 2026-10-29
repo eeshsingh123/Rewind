@@ -92,7 +92,7 @@ class Inbox:
         self._repository = repository
         self._jobs = jobs
 
-    # D-7: a provider retry of the same message is dropped here, before any work is queued.
+    # A provider retry of the same message is dropped here, before any work is queued.
     async def receive(self, message: CanonicalMessage) -> bool:
         if not await self._repository.claim_message(message.channel, message.message_id):
             return False
