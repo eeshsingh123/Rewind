@@ -15,6 +15,9 @@ class TurnContext:
     workspace_id: str
     chat: ChatRef
     now: datetime
+    # The key of this turn's reply message: an instant "One moment…" shown under it is later
+    # edited into the answer, or into a check's checklist.
+    reply_key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +34,8 @@ class ToolResult:
     media: tuple[ReplyMedia, ...] = ()
     # Started only once the turn's reply is sent, so "started" never arrives after the results.
     jobs: tuple[Job, ...] = ()
+    # When set, this is the turn's reply, word for word: the model is not asked to word it.
+    reply: str | None = None
 
 
 class ToolArguments(BaseModel):
