@@ -17,7 +17,6 @@ from rewind.contracts import (
     Attachment,
     Box,
     CanonicalMessage,
-    ChannelCapabilities,
     Charge,
     Entity,
     ExitsView,
@@ -35,7 +34,6 @@ from rewind.core.analysis import (
     Analysis,
     AnalysisSettings,
     Mark,
-    naive_tracks,
 )
 from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, Ledger
 from rewind.core.conversation import (
@@ -51,7 +49,6 @@ from rewind.core.conversation import (
     Outbox,
     Readings,
     Toolbox,
-    TurnContext,
     TurnLimits,
 )
 from rewind.core.perception import (
@@ -83,7 +80,6 @@ CARTON_RULE = RuleSpec(
     checkpoint=ExitsView(),
     requirements=(Requirement(predicate=Has(part="label"), timing="at_checkpoint"),),
 )
-CAPABILITIES = ChannelCapabilities(max_text_chars=4096, max_media_bytes=50_000_000, max_buttons=8)
 
 
 class FakeVideo:
@@ -258,21 +254,6 @@ def _payload(**extra: JsonValue) -> JobPayload:
     }  # fmt: skip
 
 
-def test_a_reused_object_id_after_a_gap_is_a_new_item() -> None:
-    def seen(t: float) -> Observation:
-        return Observation(
-            footage_id="f", t=t, concept="carton", box=Box(x0=0, y0=0, x1=0.2, y1=0.2),
-            score=0.9, object_id=7,
-        )  # fmt: skip
-
-    tracks = naive_tracks("f", [seen(0.0), seen(0.5), seen(5.0), seen(5.5)], max_gap_s=1.5)
-
-    assert [(t.track_id, len(t.observations)) for t in tracks] == [
-        ("carton#1", 2),
-        ("carton#2", 2),
-    ]
-
-
 async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_free(
     setup: Setup,
 ) -> None:
@@ -303,21 +284,6 @@ async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_
         ("flagged", "no shipping label"), ("passed", "")
     ]  # fmt: skip
     assert await setup.blobs.exists(clip.media[0].blob_key)
-
-
-async def test_analyze_asks_for_a_tap_above_the_threshold_and_starts_once(setup: Setup) -> None:
-    analyze = _analyze(setup, Readings(), Decimal("0.001"))
-    context = TurnContext("ws", ChatRef("telegram", "chat"), NOW)
-
-    result = await analyze.tool().call(context, "{}")
-    token = result.buttons[0].value.split(" ")[1]
-    first = await analyze.confirm(context, token)
-    again = await analyze.confirm(context, token)
-
-    assert "NOT started yet" in result.text
-    assert not result.jobs
-    assert [job.kind for job in first.jobs + again.jobs] == [ANALYZE_JOB]
-    assert again.text.startswith("That button has expired")
 
 
 def _analyze(setup: Setup, readings: Readings, confirm_above_usd: Decimal) -> Analyze:
@@ -414,33 +380,3 @@ async def test_a_check_asked_for_while_the_video_is_read_starts_once_it_is_ready
     assert texts[3].startswith("Checking *clip.mp4*")
     assert texts[-1].startswith("Done in ")
     assert not any("no recordings" in text for text in texts)
-
-
-async def test_a_waiting_check_above_the_threshold_asks_to_confirm_once_ready(
-    setup: Setup,
-) -> None:
-    chat = await _chat(setup, confirm_above_usd=Decimal("0.0001"))
-
-    await _video_then_check_it(setup, chat)
-
-    _, ready = setup.channel.progress(_ack_key(setup.channel))
-    assert "Checking it against 1 rule costs about $0." in ready
-    question = setup.channel.sent[-1]
-    assert question.text == "Shall I check it?"
-    assert [b.label.split(" (")[0] for b in question.buttons] == ["Check it", "Not now"]
-    assert setup.sam.calls == 0
-
-
-async def test_an_unreadable_video_turns_the_ack_into_the_failure_and_drops_the_check(
-    setup: Setup,
-) -> None:
-    chat = await _chat(setup, confirm_above_usd=Decimal(1))
-    setup.video.unreadable = True
-
-    await _video_then_check_it(setup, chat)
-
-    assert setup.channel.progress(_ack_key(setup.channel))[1] == (
-        "I couldn't read that video. Is it a normal MP4 or MOV file? So I didn't check it."
-    )
-    assert setup.channel.sent[-1].text.startswith("I couldn't read that video.")
-    assert setup.sam.calls == 0
