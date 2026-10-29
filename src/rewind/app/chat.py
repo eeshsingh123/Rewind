@@ -89,7 +89,7 @@ def build_chat(
         channels[whatsapp.name] = whatsapp
     capabilities = {name: channel.capabilities for name, channel in channels.items()}
 
-    # D-12: 8 GB of RAM, so heavy jobs run one at a time.
+    # 8 GB of RAM, so heavy jobs run one at a time.
     jobs = InProcessJobRunner({INGEST_JOB: 1, ANALYZE_JOB: 1})
     outbox = Outbox(channels)
     analysis = Analysis(

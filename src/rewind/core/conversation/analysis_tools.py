@@ -69,7 +69,7 @@ SEND_VIDEO = "Now send me a video of the line."
 
 @dataclass(frozen=True, slots=True)
 class AnalyzeSettings:
-    # D-7: an estimate above this waits for a tap; the daily cap is the ledger's.
+    # An estimate above this waits for a tap; the daily cap is the ledger's.
     confirm_above_usd: Decimal
     daily_cap_usd: Decimal
 

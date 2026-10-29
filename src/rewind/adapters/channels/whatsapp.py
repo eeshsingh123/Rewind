@@ -268,7 +268,7 @@ def webhook_router(
             raise HTTPException(status_code=403)
         return Response(challenge, media_type="text/plain")
 
-    # D-7: answer 200 at once; receive() only claims the id and queues a job.
+    # Answer 200 at once; receive() only claims the id and queues a job.
     @router.post(WEBHOOK_PATH)
     async def deliver(request: Request) -> Response:
         body = await request.body()

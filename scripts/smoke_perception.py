@@ -1,4 +1,4 @@
-# Live smoke run of T2 perception against the real SAM 3.1 API; never run in CI. Usage:
+# Live smoke run of perception against the real SAM 3.1 API; never run in CI. Usage:
 #   uv run python scripts/smoke_perception.py CLIP --concept "rectangle" [--box T,X0,Y0,X1,Y1]
 # Ingests the clip, plans dense_track, runs the plan twice (the second run must cost $0), and
 # compares the ledger with the usage the provider reported. The budget guard caps the spend.

@@ -23,7 +23,7 @@ def _page(body: str, status: int = 200) -> HTMLResponse:
 _EXPIRED = "<h1>This link has expired</h1><p>Ask Rewind in your chat for a new one.</p>"
 
 
-# The page the signed upload links point to; T6 replaces the bare form later.
+# The page the signed upload links point to; a web page can replace the bare form later.
 def upload_router(conversation: Conversation) -> APIRouter:
     router = APIRouter()
 

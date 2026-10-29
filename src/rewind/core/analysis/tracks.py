@@ -4,8 +4,8 @@ from collections.abc import Sequence
 from rewind.contracts import Observation, Track
 
 
-# Naive association until T2 has a better one: one track per segmenter object id and concept,
-# split where the object is unseen for longer than max_gap_s, because SAM reuses ids (D-13).
+# Naive association for now: one track per segmenter object id and concept,
+# split where the object is unseen for longer than max_gap_s, because SAM reuses ids.
 def naive_tracks(
     footage_id: str, observations: Sequence[Observation], max_gap_s: float
 ) -> tuple[Track, ...]:
