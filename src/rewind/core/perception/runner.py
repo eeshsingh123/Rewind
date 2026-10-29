@@ -1,6 +1,6 @@
 import logging
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from rewind.contracts import Box, Charge, Footage, Observation, SamplingPlan, TimeSpan
@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 _FRAME_HEADROOM = 0.98
 # Boxes of the same object on the same frame, seen by two requests, overlap at least this much.
 _SAME_OBJECT_IOU = 0.5
+
+# Called with (done, total) after each piece of work, so a chat can show how far a check is.
+type OnProgress = Callable[[int, int], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,23 +34,33 @@ class PerceptionRunner:
 
     # One request per concept and fps over all its windows joined, unless the cache has it.
     async def run(
-        self, footage: Footage, plan: SamplingPlan, segmenter: Segmenter
+        self,
+        footage: Footage,
+        plan: SamplingPlan,
+        segmenter: Segmenter,
+        on_progress: OnProgress | None = None,
     ) -> PerceptionResult:
         observations: list[Observation] = []
         charges: list[Charge] = []
         paid = cached = 0
-        for (concept, fps), spans in _group_windows(plan).items():
-            for chunk in _chunks(spans, fps, segmenter.max_frames):
-                clip = await self._proxies.ensure(
-                    footage.content_hash, footage.original_key, chunk, fps
-                )
-                found, new_charges = await self._segment(footage, clip, concept, segmenter)
-                observations.extend(found)
-                charges.extend(new_charges)
-                if new_charges:
-                    paid += 1
-                else:
-                    cached += 1
+        work = [
+            (concept, fps, chunk)
+            for (concept, fps), spans in _group_windows(plan).items()
+            for chunk in _chunks(spans, fps, segmenter.max_frames)
+        ]
+        for done, (concept, fps, chunk) in enumerate(work, 1):
+            clip = await self._proxies.ensure(
+                footage.content_hash, footage.original_key, chunk, fps
+            )
+            found, new_charges = await self._segment(footage, clip, concept, segmenter)
+            observations.extend(found)
+            charges.extend(new_charges)
+            if new_charges:
+                paid += 1
+            else:
+                cached += 1
+            if on_progress is not None:
+                await on_progress(done, len(work))
         return PerceptionResult(
             observations=tuple(observations),
             charges=tuple(charges),

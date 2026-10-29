@@ -15,7 +15,7 @@ from rewind.core.perception.planner import (
     rule_concepts,
 )
 from rewind.core.perception.proxy import ProxyClip, ProxyMaker
-from rewind.core.perception.runner import PerceptionResult, PerceptionRunner
+from rewind.core.perception.runner import OnProgress, PerceptionResult, PerceptionRunner
 from rewind.core.perception.strategies import STRATEGIES
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "Ingest",
     "Ingested",
     "ObservationStore",
+    "OnProgress",
     "PerceptionResult",
     "PerceptionRunner",
     "PlanInput",
