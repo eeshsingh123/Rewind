@@ -86,6 +86,14 @@ class FfmpegVideoTools:
             str(destination),
         )  # fmt: skip
 
+    async def still(self, source: Path, t: float, destination: Path) -> None:
+        await _run(
+            self._ffmpeg,
+            "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+            "-ss", f"{t:.3f}", "-i", str(source), "-frames:v", "1", "-q:v", "2",
+            str(destination),
+        )  # fmt: skip
+
 
 @dataclass(frozen=True, slots=True)
 class _Output:

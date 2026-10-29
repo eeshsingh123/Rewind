@@ -6,13 +6,12 @@ import httpx
 from rewind.adapters.segmenters.meta_api import MetaApi
 from rewind.adapters.segmenters.meta_image import MetaImageSegmenter
 from rewind.adapters.segmenters.meta_video import MetaVideoSegmenter
-from rewind.adapters.storage.cost_log import JsonlCostLog
 from rewind.adapters.storage.local_disk import LocalDiskBlobStore
 from rewind.adapters.storage.parquet_observations import ParquetObservationStore
 from rewind.adapters.video.ffmpeg import FfmpegVideoTools
 from rewind.adapters.video.opencv import OpenCvActivityProbe
 from rewind.app.settings import Settings
-from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, Ledger
+from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, CostRecords, Ledger
 from rewind.core.perception import (
     STRATEGIES,
     Ingest,
@@ -26,12 +25,13 @@ from rewind.core.ports import Segmenter
 @dataclass(frozen=True, slots=True)
 class Perception:
     blobs: LocalDiskBlobStore
+    video_tools: FfmpegVideoTools
     proxies: ProxyMaker
     ingest: Ingest
     planner: Planner
     runner: PerceptionRunner
+    observations: ParquetObservationStore
     ledger: Ledger
-    cost_log: JsonlCostLog
     video_segmenter: MetaVideoSegmenter
     image_segmenter: MetaImageSegmenter
 
@@ -43,7 +43,9 @@ class Perception:
         return BudgetedSegmenter(self.image_segmenter, self.ledger, scope)
 
 
-def build_perception(settings: Settings, client: httpx.AsyncClient) -> Perception:
+def build_perception(
+    settings: Settings, client: httpx.AsyncClient, costs: CostRecords
+) -> Perception:
     if settings.meta_api_key is None:
         raise RuntimeError("META_API_KEY is not set")
     signing_key = (
@@ -55,19 +57,20 @@ def build_perception(settings: Settings, client: httpx.AsyncClient) -> Perceptio
     video_tools = FfmpegVideoTools()
     proxies = ProxyMaker(blobs, video_tools, settings.proxy_max_height)
     api = MetaApi(client, settings.meta_api_key.get_secret_value(), settings.meta_api_base_url)
-    cost_log = JsonlCostLog(settings.data_root / "ledger.jsonl")
     limits = BudgetLimits(
         workspace_daily_usd=settings.workspace_daily_cap_usd,
         kill_switch_usd=settings.kill_switch_usd,
     )
+    observations = ParquetObservationStore(blobs)
     return Perception(
         blobs=blobs,
+        video_tools=video_tools,
         proxies=proxies,
         ingest=Ingest(blobs, video_tools, OpenCvActivityProbe(), proxies, settings.track_fps),
         planner=Planner(STRATEGIES),
-        runner=PerceptionRunner(proxies, ParquetObservationStore(blobs)),
-        ledger=Ledger(cost_log, limits),
-        cost_log=cost_log,
+        runner=PerceptionRunner(proxies, observations),
+        observations=observations,
+        ledger=Ledger(costs, limits),
         video_segmenter=MetaVideoSegmenter(api, blobs, settings.meta_file_ttl_s),
         image_segmenter=MetaImageSegmenter(api, blobs),
     )

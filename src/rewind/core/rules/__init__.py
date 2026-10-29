@@ -7,7 +7,7 @@ from rewind.core.rules.engine import (
     evaluate,
     zone_keys,
 )
-from rewind.core.rules.items import Item
+from rewind.core.rules.items import Item, build_items
 from rewind.core.rules.predicates import PREDICATES, Evaluator, evaluates
 from rewind.core.rules.zones import VIEW_EXIT, FoundZone, Keyframe, RuleError, find_zone
 
@@ -25,6 +25,7 @@ __all__ = [
     "RuleCompiler",
     "RuleError",
     "Scene",
+    "build_items",
     "checks",
     "evaluate",
     "evaluates",

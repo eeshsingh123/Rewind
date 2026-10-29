@@ -1,16 +1,21 @@
 import json
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from typing import NamedTuple
 
 import httpx
 
-from rewind.contracts import Charge, Observation
+from rewind.contracts import Attachment, ChannelCapabilities, Charge, Observation, Reply
+from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
 from rewind.core.ports import (
+    ChannelError,
     Completion,
     CompletionRequest,
     Segmentation,
     SegmentRequest,
+    ToolCall,
 )
 
 
@@ -112,3 +117,69 @@ def replay(name: str, sent: list[httpx.Request], match: bool = True) -> httpx.As
         raise AssertionError(f"no recording for this request in {name}; re-record it")
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+
+CAPABILITIES = ChannelCapabilities(max_text_chars=4096, max_media_bytes=50_000_000, max_buttons=8)
+
+
+def completion(text: str = "", *calls: ToolCall, output_tokens: int = 50) -> Completion:
+    spent = Charge(
+        provider="meta", model="muse", unit="output_token", quantity=output_tokens,
+        usd=Decimal(0),
+    )  # fmt: skip
+    return Completion(text=text, tool_calls=calls, charges=(spent,))
+
+
+@dataclass
+class ScriptedModel:
+    replies: list[Completion]
+    requests: list[CompletionRequest] = field(default_factory=list[CompletionRequest])
+    model_version: str = "muse-test"
+
+    async def complete(self, request: CompletionRequest) -> Completion:
+        self.requests.append(request)
+        return self.replies.pop(0) if self.replies else completion("ok")
+
+
+class Shown(NamedTuple):
+    # "send", "progress", "activity" or "fetch".
+    kind: str
+    chat_id: str
+    text: str
+    key: str = ""
+
+
+@dataclass
+class FakeChannel:
+    name: str = "telegram"
+    sent: list[Reply] = field(default_factory=list[Reply])
+    # Everything the chat showed, in order.
+    shown: list[Shown] = field(default_factory=list[Shown])
+    fetch_limit: int = 20_000_000
+    activity_fails: bool = False
+
+    @property
+    def capabilities(self) -> ChannelCapabilities:
+        return CAPABILITIES
+
+    async def send(self, reply: Reply) -> None:
+        self.sent.append(reply)
+        self.shown.append(Shown("send", reply.chat_id, reply.text))
+
+    async def show_progress(self, chat_id: str, key: str, text: str) -> None:
+        self.sent.append(Reply(channel=self.name, chat_id=chat_id, text=text))
+        self.shown.append(Shown("progress", chat_id, text, key))
+
+    async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
+        self.shown.append(Shown("activity", chat_id, kind))
+        if self.activity_fails:
+            raise ChannelError("telegram sendChatAction: Too Many Requests")
+
+    async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
+        if (attachment.size_bytes or 0) > self.fetch_limit:
+            raise AttachmentTooLargeError(self.fetch_limit)
+        self.shown.append(Shown("fetch", "", attachment.ref))
+        destination.write_bytes(b"video")
+
+    def progress(self, key: str) -> list[str]:
+        return [s.text for s in self.shown if s.kind == "progress" and s.key == key]

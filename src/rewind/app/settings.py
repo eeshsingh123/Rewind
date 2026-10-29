@@ -1,8 +1,9 @@
 from decimal import Decimal
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 HARD_LIMIT_USD = Decimal("140")
 
@@ -30,3 +31,29 @@ class Settings(BaseSettings):
     # All-time spend across workspaces. The account has $150 of credit, so the setting may be
     # raised for a demo but never past HARD_LIMIT_USD, which keeps the card from being charged.
     kill_switch_usd: Decimal = Field(default=Decimal("120"), ge=0, le=HARD_LIMIT_USD)
+    # SQLite under the data root until Neon; the same code runs on a Postgres URL.
+    database_url: str | None = None
+    # Chat channels: a channel whose token is unset is not started. Ids are comma-separated.
+    telegram_bot_token: SecretStr | None = None
+    telegram_allowed_user_ids: Annotated[set[str], NoDecode] = Field(default_factory=set[str])
+    whatsapp_token: SecretStr | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_app_id: str | None = None
+    whatsapp_app_secret: SecretStr | None = None
+    whatsapp_verify_token: SecretStr | None = None
+    # Comma-separated, in international format without the plus.
+    whatsapp_allowed_numbers: Annotated[set[str], NoDecode] = Field(default_factory=set[str])
+    # An analysis estimated above this asks for a confirm button first (D-7).
+    confirm_above_usd: Decimal = Field(default=Decimal("0.25"), ge=0)
+
+    @property
+    def database_url_or_default(self) -> str:
+        path = (self.data_root / "rewind.db").as_posix()
+        return self.database_url or f"sqlite+aiosqlite:///{path}"
+
+    @field_validator("telegram_allowed_user_ids", "whatsapp_allowed_numbers", mode="before")
+    @classmethod
+    def _split_list(cls, value: object) -> object:
+        if isinstance(value, str):
+            return {item.strip().lstrip("+") for item in value.split(",") if item.strip()}
+        return value

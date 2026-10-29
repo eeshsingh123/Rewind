@@ -6,6 +6,7 @@ from rewind.core.budget.guarded import (
     estimate_completion_usd,
 )
 from rewind.core.budget.ledger import (
+    EPOCH,
     UNCONFIRMED_SUFFIX,
     BudgetExceededError,
     BudgetLimits,
@@ -14,6 +15,7 @@ from rewind.core.budget.ledger import (
 )
 
 __all__ = [
+    "EPOCH",
     "UNCONFIRMED_SUFFIX",
     "BudgetExceededError",
     "BudgetLimits",
