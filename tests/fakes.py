@@ -79,6 +79,10 @@ class FakeSegmenter:
         return 16
 
     @property
+    def max_tracked_objects(self) -> int | None:
+        return None
+
+    @property
     def min_billed_frames(self) -> int:
         return 1
 

@@ -66,6 +66,7 @@ class FakeSegmenter:
     model_version = "sam-3.1"
     max_frames = 15_000
     max_prompt_objects = 16
+    max_tracked_objects = 16
     min_billed_frames = 50
 
     def __init__(self) -> None:

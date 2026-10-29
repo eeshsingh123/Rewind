@@ -1,14 +1,19 @@
+import logging
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from rewind.contracts import Charge, Footage, Observation, SamplingPlan, TimeSpan
+from rewind.contracts import Box, Charge, Footage, Observation, SamplingPlan, TimeSpan
 from rewind.core.perception.cache import CachedFrames, CacheKey, ObservationStore, frame_index
 from rewind.core.perception.proxy import ProxyClip, ProxyMaker
 from rewind.core.ports import ConceptPrompt, Segmenter, SegmentRequest
 
+logger = logging.getLogger(__name__)
+
 # Spans are cut a little short of the frame limit, as a span's frame count can round up.
 _FRAME_HEADROOM = 0.98
+# Boxes of the same object on the same frame, seen by two requests, overlap at least this much.
+_SAME_OBJECT_IOU = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,23 +71,110 @@ class PerceptionRunner:
             clip = await self._proxies.ensure(
                 footage.content_hash, footage.original_key, spans, clip.proxy.fps
             )
-        request = SegmentRequest(
-            footage_id=footage.id,
-            media_key=clip.proxy.blob_key,
-            width=clip.width,
-            height=clip.height,
-            frame_times=clip.frame_times,
-            prompt=ConceptPrompt(concept),
-        )
-        result = await segmenter.segment(request)
+        observations, charges = await self._track(footage, clip, concept, segmenter)
         found: defaultdict[int, list[Observation]] = defaultdict(list)
-        for observation in result.observations:
+        for observation in observations:
             found[frame_index(observation.t, footage.fps)].append(observation)
         frames = dict(stored.frames)
         frames.update({frame_index(t, footage.fps): () for t in clip.frame_times})
         frames.update({index: tuple(seen) for index, seen in found.items()})
         await self._store.save(key, CachedFrames(frames=frames))
-        return hits + list(result.observations), result.charges
+        return hits + observations, charges
+
+    # A request stops finding new objects once it has found as many as the segmenter can follow,
+    # so a busy line would lose every later item. From the frame where it filled up, a new request
+    # takes over with fresh slots; its ids are matched to the old ones on that shared frame.
+    async def _track(
+        self, footage: Footage, clip: ProxyClip, concept: str, segmenter: Segmenter
+    ) -> tuple[list[Observation], tuple[Charge, ...]]:
+        kept: list[Observation] = []
+        charges: list[Charge] = []
+        previous: list[Observation] = []
+        next_id = 0
+        while True:
+            request = SegmentRequest(
+                footage_id=footage.id,
+                media_key=clip.proxy.blob_key,
+                width=clip.width,
+                height=clip.height,
+                frame_times=clip.frame_times,
+                prompt=ConceptPrompt(concept),
+            )
+            result = await segmenter.segment(request)
+            charges.extend(result.charges)
+            first = frame_index(clip.frame_times[0], footage.fps)
+            found, next_id = _continue_ids(previous, result.observations, footage.fps, next_id)
+            full_at = _full_at(result.observations, segmenter.max_tracked_objects)
+            if full_at is None or frame_index(full_at, footage.fps) <= first:
+                if full_at is not None:
+                    logger.warning("%s: too many %r in one frame to follow", footage.id, concept)
+                return kept + found, tuple(charges)
+            full = frame_index(full_at, footage.fps)
+            kept.extend(o for o in found if frame_index(o.t, footage.fps) < full)
+            previous = [o for o in found if frame_index(o.t, footage.fps) == full]
+            rest = [frame_index(t, footage.fps) >= full for t in clip.frame_times]
+            clip = await self._proxies.ensure(
+                footage.content_hash,
+                footage.original_key,
+                _spans_around(clip.frame_times, rest, clip.proxy.fps),
+                clip.proxy.fps,
+            )
+
+
+# When the request found its last new object, if that filled every slot it has.
+def _full_at(observations: Sequence[Observation], limit: int | None) -> float | None:
+    first_seen: dict[int, float] = {}
+    for observation in sorted(observations, key=lambda o: o.t):
+        if observation.object_id is not None:
+            first_seen.setdefault(observation.object_id, observation.t)
+    if limit is None or len(first_seen) < limit:
+        return None
+    return max(first_seen.values())
+
+
+# Renumbers a request's objects from next_id up. After a full request, `previous` holds what it
+# saw on the frame this request starts on: an object found there again keeps its earlier id.
+def _continue_ids(
+    previous: Sequence[Observation],
+    found: Sequence[Observation],
+    footage_fps: float,
+    next_id: int,
+) -> tuple[list[Observation], int]:
+    renamed: dict[int, int] = {}
+    if previous:
+        shared = frame_index(previous[0].t, footage_fps)
+        starts = [o for o in found if frame_index(o.t, footage_fps) == shared]
+        pairs = sorted(
+            ((_iou(old.box, new.box), old.object_id, new.object_id)
+             for old in previous for new in starts),
+            key=lambda pair: -pair[0],
+        )  # fmt: skip
+        for iou, old_id, new_id in pairs:
+            if iou < _SAME_OBJECT_IOU:
+                break
+            if old_id is None or new_id is None or new_id in renamed:
+                continue
+            if old_id not in renamed.values():
+                renamed[new_id] = old_id
+    for object_id in sorted({o.object_id for o in found if o.object_id is not None}):
+        if object_id not in renamed:
+            renamed[object_id] = next_id
+            next_id += 1
+    renumbered = [
+        o if o.object_id is None else o.model_copy(update={"object_id": renamed[o.object_id]})
+        for o in found
+    ]
+    return renumbered, next_id
+
+
+def _iou(a: Box, b: Box) -> float:
+    width = min(a.x1, b.x1) - max(a.x0, b.x0)
+    height = min(a.y1, b.y1) - max(a.y0, b.y0)
+    if width <= 0 or height <= 0:
+        return 0.0
+    inter = width * height
+    union = (a.x1 - a.x0) * (a.y1 - a.y0) + (b.x1 - b.x0) * (b.y1 - b.y0) - inter
+    return inter / union
 
 
 def _group_windows(plan: SamplingPlan) -> dict[tuple[str, float], list[TimeSpan]]:

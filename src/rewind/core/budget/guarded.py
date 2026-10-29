@@ -43,6 +43,10 @@ class BudgetedSegmenter:
         return self._inner.max_prompt_objects
 
     @property
+    def max_tracked_objects(self) -> int | None:
+        return self._inner.max_tracked_objects
+
+    @property
     def min_billed_frames(self) -> int:
         return self._inner.min_billed_frames
 

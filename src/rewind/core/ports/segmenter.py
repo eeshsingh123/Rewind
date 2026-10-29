@@ -69,6 +69,11 @@ class Segmenter(Protocol):
     def max_prompt_objects(self) -> int: ...
 
     @property
+    def max_tracked_objects(self) -> int | None:
+        """Most objects one request follows; once it has found this many, it finds no more."""
+        ...
+
+    @property
     def min_billed_frames(self) -> int:
         """Every request bills at least this many frames, so join short windows into one clip."""
         ...
