@@ -26,12 +26,14 @@ from rewind.core.conversation import (
     Inbox,
     Outbox,
     Readings,
+    Sample,
     Toolbox,
     TurnLimits,
     add_rule,
     create_line,
+    guide_commands,
     list_rules,
-    rule_commands,
+    rename_line,
     upload_link,
     with_activity,
 )
@@ -103,6 +105,7 @@ def build_chat(
         stills=perception.video_tools,
         clips=OpenCvProofClips(),
         notifier=outbox,
+        capabilities=capabilities,
         settings=AnalysisSettings(fps=settings.track_fps),
     )
     readings = Readings()
@@ -111,6 +114,10 @@ def build_chat(
         AnalyzeSettings(settings.confirm_above_usd, settings.workspace_daily_cap_usd), _now,
     )  # fmt: skip
     findings = Findings(repository, analysis, capabilities)
+    sample = Sample(
+        repository, blobs, compiler_for, readings, outbox, analyze,
+        settings.sample_video if settings.sample_video.is_file() else None,
+    )  # fmt: skip
     conversation_settings = ConversationSettings(
         allowed_senders=frozenset(
             {f"telegram:{user}" for user in settings.telegram_allowed_user_ids}
@@ -121,6 +128,7 @@ def build_chat(
     toolbox = Toolbox.of(
         [
             create_line(repository),
+            rename_line(repository),
             list_rules(repository),
             add_rule(repository, compiler_for),
             upload_link(
@@ -143,10 +151,15 @@ def build_chat(
         settings=conversation_settings,
         clock=_now,
         commands={
+            **guide_commands(repository, sample.available),
+            "/sample": sample.run,
             "/confirm": analyze.confirm,
             "/cancel": analyze.cancel,
+            "/keep_rule": analyze.keep_rule,
+            "/drop_rule": analyze.drop_rule,
+            "/older": analyze.older,
             "/clip": findings.clip_command,
-            **rule_commands(repository),
+            "/clips": findings.clips_command,
         },
     )
     jobs.register(TURN_JOB, conversation.handle_job)

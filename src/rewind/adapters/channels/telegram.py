@@ -3,7 +3,7 @@ import html
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,8 @@ FETCH_LIMIT_BYTES = 20 * 1024 * 1024
 CAPABILITIES = ChannelCapabilities(
     max_text_chars=4096, max_media_bytes=50 * 1024 * 1024, max_buttons=8
 )
+# Telegram cuts a video caption off at this many characters; a longer one goes as text after it.
+CAPTION_LIMIT = 1024
 POLL_TIMEOUT_S = 50
 RETRY_AFTER_ERROR_S = 5
 _BOLD = re.compile(r"\*([^*\n]+)\*")
@@ -90,27 +92,38 @@ class TelegramChannel:
 
     async def send(self, reply: Reply) -> None:
         markup = _keyboard(reply.buttons[: CAPABILITIES.max_buttons])
-        text = _html(reply.text)
+        text = reply.text
         for index, media in enumerate(reply.media):
             path = await self._blobs.local_path(media.blob_key)
-            caption = _html(media.caption or "")
-            fields: dict[str, Any] = {"chat_id": reply.chat_id, "caption": caption,
+            caption = media.caption or ""
+            if len(caption) > CAPTION_LIMIT:
+                text = f"{caption}\n\n{text}".strip()
+                caption = ""
+            fields: dict[str, Any] = {"chat_id": reply.chat_id, "caption": _html(caption),
                                       "parse_mode": "HTML"}  # fmt: skip
             # With no text after it, the last video carries the buttons: one message, not two.
             if markup is not None and not text and index == len(reply.media) - 1:
                 fields["reply_markup"] = json.dumps(markup)
             await self._call_with_file("sendVideo", fields, "video", path)
         if text:
-            await self._call("sendMessage", _text_body(reply.chat_id, text, markup))
+            await self._call("sendMessage", _text_body(reply.chat_id, _html(text), markup))
 
-    async def show_progress(self, chat_id: str, key: str, text: str) -> None:
+    async def show_progress(
+        self, chat_id: str, key: str, text: str, buttons: tuple[Button, ...] = ()
+    ) -> None:
+        markup = _keyboard(buttons[: CAPABILITIES.max_buttons])
         message_id = self._progress.get((chat_id, key))
         if message_id is not None:
-            body = _text_body(chat_id, _html(text), None) | {"message_id": message_id}
+            body = _text_body(chat_id, _html(text), markup) | {"message_id": message_id}
             await self._call("editMessageText", body)
             return
-        sent = await self._call("sendMessage", _text_body(chat_id, _html(text), None))
+        sent = await self._call("sendMessage", _text_body(chat_id, _html(text), markup))
         self._progress[(chat_id, key)] = int(sent["message_id"])
+
+    # The "/" menu in the chat: (command, what it does), in order.
+    async def set_commands(self, commands: Sequence[tuple[str, str]]) -> None:
+        listed = [{"command": name, "description": text} for name, text in commands]
+        await self._call("setMyCommands", {"commands": listed})
 
     async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
         await self._call("sendChatAction", {"chat_id": chat_id, "action": kind})
