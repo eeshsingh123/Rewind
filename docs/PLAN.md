@@ -28,11 +28,17 @@ Each phase is one branch and one PR, small enough for one session.
 
 1. **The agent and its tools.** One video is one session (no lines). On upload: make the proxy, then Muse watches the whole video once and returns a scene summary, a timeline of events with times, and 3–5 suggested questions. Then a Muse agent answers any question with tools: `watch` (Muse on the video or a part of it), `find` (SAM tracks a thing), `look` (Muse on crops or frames), `measure` (code: counts, gaps, stops, durations, the rule engine), `clip` (proof clip with boxes). Every step sends a progress event. Every answer cites tool results; code drops any time or number not in them, and marks each claim "measured" or "seen". Per-question budget cap. Check from a script on s1 and s2.
    Done when: on s1, "anything wrong?" names the stop with the right times, and "which jars have no label?" finds at least 3 of 4 with clips.
-2. **Web page.** Upload, the video with a timeline of clickable markers, a chat that streams the steps live, clips inline. Warm, neutral, calm colours; clean and minimal. Served by the existing FastAPI app.
-   Done when: the owner uploads a clip in the browser, asks two questions and sees each step and each clip.
-3. **Telegram and WhatsApp on the new agent.** Send a video: the first look comes back with suggested questions as buttons. Ask anything. Progress is one message edited in place; the answer is one message with the clip. Remove lines, rule drafts and "Looks right" from the flow.
-   Done when: the same question gives the same answer on all three channels.
-4. **Accuracy table.** Fixed questions on s1 and s2 scored against the answer keys: precision, recall, time error, cost, run time. A real stock clip row if one exists.
+2. **Web page.** Upload, the video with a timeline of clickable markers, a chat that streams the steps live, clips inline. Warm, neutral, calm colours; clean and minimal. Served by the existing FastAPI app. Also:
+   - Ready samples: 2–3 clips a visitor taps to get a cached answer at once, at no cost.
+   - Each answer ends with a quiet cost line ("cost $0.003").
+   - Point to track: drag a box on a frame and ask "follow this"; SAM tracks it from the box prompt.
+   - Every session has its own link, so a chat can point to it.
+   Done when: the owner uploads a clip in the browser, asks two questions and sees each step and each clip; a sample answers at once; a dragged box is tracked.
+3. **Telegram and WhatsApp on the new agent.** Send a video: the first look comes back with suggested questions as buttons. Ask anything. Progress is one message edited in place; the answer is one message with the clip. Remove lines, rule drafts and "Looks right" from the flow. Also:
+   - Voice notes in any language: Meta's speech-to-text turns the note into the question, and the answer comes back in the language asked.
+   - Every answer ends with "Open the full timeline", linking to that session's web page.
+   Done when: the same question gives the same answer on all three channels, and a Hindi voice note gets a Hindi answer.
+4. **Accuracy table.** Fixed questions on s1 and s2 scored against the answer keys: precision, recall, time error, cost, run time. A row for the owner's real clip (below), hand-labelled.
 5. **Submission.** README with a diagram, a 3-minute demo video, the written answers, credits.
 
 ## Only if time is left
@@ -55,8 +61,9 @@ If time runs short, cut from the bottom up. Never cut: proof clips, the accuracy
 ## Open questions for the owner
 
 - Product name: keep "Rewind"?
-- Judges try the live product. Is the owner's machine plus a tunnel enough, or do we need an always-on host?
 
 ## Owner setup still open
 
 - [ ] WhatsApp keys (names in `.env.example`).
+- [ ] Film one real 1–2 minute phone clip with a known fault (for example, packing boxes on a table with one left untaped) and note the fault times. Used in the demo and the accuracy table.
+- [ ] Decide hosting before phase 3: judges try it live, and a tunnel to the laptop works only while it is on.
