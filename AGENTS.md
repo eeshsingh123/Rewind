@@ -8,7 +8,8 @@ A camera checker for production and packing lines that you talk to through chat.
 - Cost follows the rules, not the length of the footage. A paid model call happens only when the sampling plan asks for it, and never twice for the same input.
 - The rule engine is deterministic. AI translates and perceives; plain code decides.
 - The chat app does not matter: WhatsApp, Telegram, web and MCP clients all reach the same agent and get the same answers.
-- Works for any line: a new line is a new sentence and new footage, never new code.
+- Works for any line: a new line is a new sentence and new footage, never new code. Never tune logic or thresholds to one clip; a fix found on one video is checked on another kind of footage.
+- Plain words first: the user experience is the top priority. Replies and clips are read by a line manager, not an engineer: times instead of ids ("the box at 00:14"), one line per rule, boxes drawn on the proof, and as few messages as possible.
 
 ## Source of truth
 

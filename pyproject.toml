@@ -33,7 +33,20 @@ dev = [
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
+    "types-pyyaml>=6.0.12.20260906",
 ]
+sim = [
+    "huggingface-hub>=2.3.0",
+    "numpy>=2.5.4",
+    "opencv-python-headless>=5.0.0.93",
+    "pillow>=13.0.0",
+    "pyyaml>=6.0.3",
+    "segno>=1.6.6",
+]
+
+# The sim group is installed by default so pyright and the tests see its imports.
+[tool.uv]
+default-groups = ["dev", "sim"]
 
 [tool.ruff]
 line-length = 100
@@ -45,6 +58,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "A", "C4", "PT", "PIE", "
 
 [tool.pyright]
 include = ["src", "sim", "eval", "tests"]
+# Runs inside Blender, whose bpy module the project environment cannot install.
+exclude = ["sim/blender"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 strict = ["src/rewind/contracts", "src/rewind/core"]

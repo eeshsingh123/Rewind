@@ -97,11 +97,17 @@ Why: a background model learns a busy line as background and reports it idle, an
 ### D-16 Rule semantics (T3) — accepted (2026-10-29)
 
 - `at_checkpoint` means the predicate held within the 1.0 s before the checkpoint (`CHECKPOINT_WINDOW_S` in `core.rules`), so perception must sample parts in that window. `ever_before` runs from the item's first sighting to the checkpoint.
-- `exits_view` is a track's last sighting, if that is more than 1 s before the end of the footage. Items still in view at the end are not judged. `end_of_footage` judges every item as last seen. A sentence that names no moment uses `exits_view`.
+- `exits_view` is a track's last sighting, judged only if the track ends at a frame border (within 2 % of the frame) more than 1 s before the end of the footage. Not judged: items still in view at the end, tracks that end inside the frame (lost, not gone), items never seen whole, and objects that never leave their own footprint (background). For an exit, `at_checkpoint` runs from 1 s before the last moment the item was whole in the frame up to the exit; `checks()` returns that moment as `look_at`. Revised 2026-10-29: the last second before an exit is a sliver at the border, with the label already out of frame, so 6 of 10 findings on the stock clip were labelled boxes. `end_of_footage` judges every item as last seen. A sentence that names no moment uses `exits_view`.
 - `count_at_least` counts parts seen together in one frame. `order before(a, b)` compares first sightings, and the same frame counts as in order.
 - One violation per item per checkpoint, with the reasons joined; one per dwell overstay; one per whole minute below `rate` (the tail is ignored; footage under a minute is judged pro rata). Violation ids hash (rule, footage, track, check), so a rerun upserts.
 - The compiler returns `zone_phrases` next to the `RuleSpec`, so an undrawn zone can be found by text. Compiled rules are cached by normalized text and model version. The Muse adapter sends `prompt_cache_key`: with it the compile prompt hit the cache on 15 of 16 calls, against 1 of 8 without.
 Why: the engine has to decide these, and the planner (sampling windows), T1's ground truth and T7's scoring all depend on them. Open questions are in MEMORY.md.
+
+### D-17 Perception on busy lines — accepted (2026-10-29)
+
+SAM video follows at most 16 objects per request and then finds no new ones. When a request fills up, the runner sends the rest of the window again from that frame, and on the shared frame each object keeps its id (box IoU ≥ 0.5). Parts a rule needs only at its checkpoint are looked for with one SAM image call per item at its `look_at` moment (cached under `<model>/still`). Video tracks the items, plus any part needed over time (`ever_before`, `order`).
+Why: on the stock clip all 16 label slots were used in the first frame and all box slots by 3.5 s, so later parcels were never seen. An image call found 21 labels in one frame. Cost: a busy clip pays more 50-frame requests (the stock clip went from $0.02 to $0.05), and parts cost $0.0025 per judged item.
+Limits: a frame with 16 or more matching objects stays capped (T1's S2 render has 16 "carton" objects in every frame, counting the shelves); the fix is cropping to the work area (T2 P1, `SamplingWindow.region`). A new request does not always re-detect every object it takes over, which costs recall, never precision.
 
 ## Done
 
