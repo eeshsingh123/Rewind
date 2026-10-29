@@ -1,11 +1,10 @@
-import asyncio
 import dataclasses
 import hashlib
 import logging
 import math
 import tempfile
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -16,6 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from rewind.contracts import (
     Button,
+    ChannelCapabilities,
     Charge,
     CostEstimate,
     Footage,
@@ -35,13 +35,16 @@ from rewind.core.analysis.parts import (
     still_times,
     tracking_spec,
 )
-from rewind.core.analysis.proof import ClipMaker, ProofMarks, proof_marks
+from rewind.core.analysis.progress import Checklist, Notifier, Step, about_time
+from rewind.core.analysis.proof import ClipMaker, ProofMarks, passed_marks, proof_marks
 from rewind.core.analysis.replies import (
     RuleOutcome,
     clip_caption,
     duration_text,
+    join_words,
     plural,
-    rule_summary,
+    rule_result,
+    video_length,
 )
 from rewind.core.analysis.tracks import naive_tracks
 from rewind.core.budget import BudgetExceededError, BudgetScope
@@ -56,7 +59,6 @@ from rewind.core.perception import (
 )
 from rewind.core.ports import (
     BlobStore,
-    ChannelError,
     ConceptPrompt,
     JobPayload,
     Repository,
@@ -68,6 +70,7 @@ from rewind.core.ports import (
 )
 from rewind.core.rules import (
     Check,
+    Item,
     Keyframe,
     RuleCompileError,
     RuleCompiler,
@@ -87,20 +90,14 @@ ANALYZE_JOB = "analyze"
 _SPANS = TypeAdapter(tuple[TimeSpan, ...])
 # Estimates price frames only; the prompt is never sent.
 _NO_PROMPT = ConceptPrompt("estimate")
-PROGRESS_EVERY_S = 30.0
-
-
-class Notifier(Protocol):
-    async def notify(
-        self,
-        channel: str,
-        chat_id: str,
-        text: str,
-        media: tuple[ReplyMedia, ...] = (),
-        buttons: tuple[Button, ...] = (),
-    ) -> None: ...
-
-    async def progress(self, channel: str, chat_id: str, key: str, text: str) -> None: ...
+# How long a check takes, roughly: a fixed start, then each frame SAM still has to see (one
+# request, mask decoding, and the stills of the items it finds), and each frame already cached.
+START_S = 15.0
+PAID_FRAME_S = 3.0
+CACHED_FRAME_S = 0.2
+# The sample's line is per workspace and never the default line, so a person's own videos are
+# not checked against the sample rule.
+_SAMPLE_LINE = "-sample"
 
 
 class Segmenters(Protocol):
@@ -133,6 +130,7 @@ class Estimate:
     # Parts looked for on one still per item; how many items there are is known only after.
     parts_on_stills: tuple[str, ...]
     per_item_usd: Decimal
+    seconds: float
 
     @property
     def total_usd(self) -> Decimal:
@@ -162,10 +160,80 @@ class Checked:
     outcomes: tuple[RuleOutcome, ...]
     cost: Decimal
     skipped: tuple[str, ...]
+    # What to show when nothing failed: every judged item around the first one, in green.
+    passed: tuple[TimeSpan, ProofMarks] | None
+
+
+@dataclass(frozen=True, slots=True)
+class CheckRequest:
+    # How the check is named in its checklist: "the sample", "your video".
+    title: str | None = None
+    # Said above the checklist, such as "Saved as rule 1.".
+    lead: str = ""
+    estimate_s: float = 0.0
+    estimate_usd: Decimal = Decimal(0)
 
 
 def footage_name(footage: Footage) -> str:
     return PurePosixPath(footage.original_key).name
+
+
+def sample_line_id(workspace_id: str) -> str:
+    return f"{workspace_id}{_SAMPLE_LINE}"
+
+
+def is_sample_line(line: Line) -> bool:
+    return line.id == sample_line_id(line.workspace_id)
+
+
+def check_steps(footage: Footage, rules: Sequence[Rule]) -> list[Step]:
+    entities = sorted({rule.spec.entity.phrase for rule in rules})
+    parts = sorted({phrase for rule in rules for phrase in checkpoint_parts(rule.spec)})
+    steps = [
+        Step("received", "Video received", "Video received", "done"),
+        Step("read", "Reading the video", f"Video read ({video_length(footage.duration_s)})",
+             "done"),
+        Step("find", f"Finding {join_words([plural(e, 2) for e in entities])}"),
+    ]  # fmt: skip
+    if parts:
+        steps.append(Step("parts", f"Looking for {join_words([plural(p, 2) for p in parts])}"))
+    steps.append(Step("rules", f"Checking {len(rules)} {plural('rule', len(rules))}"))
+    steps.append(Step("clip", "Making the clip"))
+    return steps
+
+
+def check_header(request: CheckRequest, what: str) -> str:
+    return (
+        f"{request.lead}Checking {what} · {about_time(request.estimate_s)} · "
+        f"about ${request.estimate_usd:.2f}"
+    )
+
+
+def check_request(payload: JobPayload) -> CheckRequest:
+    title = payload.get("title")
+    return CheckRequest(
+        title=str(title) if title else None,
+        lead=str(payload.get("lead") or ""),
+        estimate_s=float(str(payload.get("estimate_s") or 0)),
+        estimate_usd=Decimal(str(payload.get("estimate_usd") or 0)),
+    )
+
+
+def check_payload(request: CheckRequest) -> JobPayload:
+    payload: JobPayload = {
+        "lead": request.lead,
+        "estimate_s": request.estimate_s,
+        "estimate_usd": str(request.estimate_usd),
+    }
+    if request.title:
+        payload["title"] = request.title
+    return payload
+
+
+def check_title(request: CheckRequest, footage: Footage, index: int, count: int) -> str:
+    if count > 1:
+        return f"*{footage_name(footage)}* ({index} of {count})"
+    return request.title or "your video"
 
 
 class Analysis:
@@ -183,6 +251,7 @@ class Analysis:
         stills: StillGrabber,
         clips: ClipMaker,
         notifier: Notifier,
+        capabilities: Mapping[str, ChannelCapabilities],
         settings: AnalysisSettings,
     ) -> None:
         self._repository = repository
@@ -197,6 +266,7 @@ class Analysis:
         self._stills = stills
         self._clips = clips
         self._notifier = notifier
+        self._capabilities = capabilities
         self._settings = settings
         self._parts = PartLooker(blobs, observations, stills)
 
@@ -213,25 +283,17 @@ class Analysis:
         await self._blobs.write(_spans_key(footage.id), _SPANS.dump_json(ingested.active_spans))
         await self._repository.save_footage(footage)
         moving = sum(span.end - span.start for span in ingested.active_spans)
-        summary = (
-            f"Got it: {duration_text(footage.duration_s)} of *{line.name}* "
-            f"({footage_name(footage)}, {footage.width}x{footage.height})."
-        )
+        summary = f"✓ Got your video ({video_length(footage.duration_s)})."
         if moving >= footage.duration_s - 1:
             summary += " Something moves for the whole clip."
         elif moving == 0:
             summary += " Nothing moves in it, so there is nothing to check."
         else:
             summary += f" Something moves for {duration_text(moving)}; I'll only check that."
-        rules = [rule for rule in await self._repository.rules(line.id) if rule.active]
-        if rules:
-            count = f"{len(rules)} {plural('rule', len(rules))}"
-            next_step = f"This line has {count}. Ask me to check it."
-        else:
-            next_step = (
-                "This line has no rules yet. Tell me what every item must have or do, "
-                "one sentence per rule."
-            )
+        next_step = (
+            "Now tell me one rule in plain words, for example: "
+            '"every box has a label when it leaves the view".'
+        )
         return Read(line, footage, summary, next_step)
 
     async def estimate(
@@ -248,15 +310,20 @@ class Analysis:
             one_image = CostEstimate(charges=image.estimate(request)).total_usd
         missing = _missing_zones(line, specs)
         on_stills = tuple(sorted({phrase for spec in specs for phrase in checkpoint_parts(spec)}))
+        paid = sum(e.frames - e.cached_frames for e in estimates)
+        cached = sum(e.cached_frames for e in estimates)
+        seconds = START_S * len(estimates) + PAID_FRAME_S * paid + CACHED_FRAME_S * cached
         return Estimate(
             tuple(estimates), missing, one_image * len(missing), on_stills,
-            one_image * len(on_stills),
+            one_image * len(on_stills), seconds,
         )  # fmt: skip
 
     async def handle_analyze(self, payload: JobPayload) -> None:
         workspace_id = str(payload["workspace_id"])
         channel, chat_id = str(payload["channel"]), str(payload["chat_id"])
         job_id = str(payload["job_id"])
+        key = str(payload.get("progress_key") or job_id)
+        request = check_request(payload)
         scope = BudgetScope(workspace_id, job_id)
         line = await self._repository.get_line(str(payload["line_id"]))
         rule_ids = _strings(payload["rule_ids"])
@@ -267,37 +334,46 @@ class Analysis:
         numbers = await self.rule_numbers(line.id)
         started = time.monotonic()
         spent = Decimal(0)
-        sections: list[str] = []
-        with_findings: Footage | None = None
+        checked: list[tuple[Footage, Checked]] = []
+        problems: list[str] = []
+        checklist: Checklist | None = None
+        what = ""
         for index, footage_id in enumerate(footage_ids, 1):
             footage = await self._repository.get_footage(footage_id)
             if footage is None:
                 continue
-            name = footage_name(footage)
-            of = f" ({index} of {len(footage_ids)})" if len(footage_ids) > 1 else ""
-            progress = _Progress(
-                self._notifier, channel, chat_id, job_id, f"Checking *{name}*{of}…"
-            )
+            what = check_title(request, footage, index, len(footage_ids))
+            checklist = Checklist(
+                self._notifier, channel, chat_id, key, check_header(request, what),
+                check_steps(footage, rules),
+            )  # fmt: skip
+            await checklist.show()
             try:
-                async with progress:
-                    checked = await self._check(line, footage, rules, numbers, scope)
+                result = await self._check(line, footage, rules, numbers, scope, checklist)
             except BudgetExceededError as error:
-                sections.append(f"I stopped before *{name}*: {error}.")
+                problems.append(f"I stopped before *{footage_name(footage)}*: {error}.")
                 break
             except (SegmenterError, VideoToolsError, RuleCompileError):
                 logger.exception("analysis of %s failed", footage.id)
-                sections.append(f"*{name}*: something went wrong while checking it. Try again.")
+                problems.append(
+                    f"*{footage_name(footage)}*: something went wrong while checking it. Try again."
+                )
                 continue
-            line = checked.line
-            spent += checked.cost
-            sections.append(_footage_summary(footage, checked))
-            if with_findings is None and any(o.violations for o in checked.outcomes):
-                with_findings = footage
-        elapsed = duration_text(time.monotonic() - started)
-        text = f"Done in {elapsed} for ${spent:.2f}.\n\n" + "\n\n".join(sections)
-        buttons = ()
-        if with_findings is not None:
-            buttons = (Button(label="Show clips", value=f"/clip {with_findings.id} 1"),)
+            line = result.line
+            spent += result.cost
+            checked.append((footage, result))
+        media = await self._result_clip(line, channel, checked, checklist)
+        if checklist is not None:
+            elapsed = duration_text(time.monotonic() - started)
+            verb = "Checked" if checked else "Couldn't check"
+            checklist.header = f"{request.lead}{verb} {what} in {elapsed} · ${spent:.2f}"
+            await checklist.show()
+        text = _result_text(checked, media, problems)
+        buttons = await self._result_buttons(line, checked, footage_ids)
+        if media is not None:
+            media = media.model_copy(update={"caption": text})
+            await self._notifier.notify(channel, chat_id, "", media=(media,), buttons=buttons)
+            return
         await self._notifier.notify(channel, chat_id, text, buttons=buttons)
 
     async def clip(
@@ -313,26 +389,90 @@ class Analysis:
             if await self._blobs.exists(marks_key)
             else ProofMarks(marks=())
         )
-        # Named by what is drawn, so a rerun that changes the boxes renders a new clip.
-        drawn = hashlib.sha256(_MARKS.dump_json(marks)).hexdigest()[:12]
-        key = f"proof/{violation.id}-{drawn}.mp4"
-        if not await self._blobs.exists(key):
-            span = TimeSpan(
-                start=max(0.0, violation.clip.start),
-                end=min(footage.duration_s, violation.clip.end),
-            )
-            source = await self._blobs.local_path(footage.original_key)
-            with tempfile.TemporaryDirectory() as workdir:
-                destination = Path(workdir) / "clip.mp4"
-                if marks.marks:
-                    await self._clips.make_clip(source, destination, span, marks.marks)
-                else:
-                    await self._video.cut_clip(source, destination, span)
-                await self._blobs.write_file(key, destination)
-        size = (await self._blobs.local_path(key)).stat().st_size
-        if size > max_bytes:
+        span = TimeSpan(
+            start=max(0.0, violation.clip.start), end=min(footage.duration_s, violation.clip.end)
+        )
+        key = await self._render(footage, span, marks, violation.id)
+        if (await self._blobs.local_path(key)).stat().st_size > max_bytes:
             return Clip((), caption + "\n(The clip is too big to send on this chat.)")
         return Clip((ReplyMedia(kind="video", blob_key=key, caption=caption),), caption)
+
+    # The clip that goes with the result: the first failure of the rule that failed most, or,
+    # when nothing failed, the items that passed.
+    async def _result_clip(
+        self,
+        line: Line,
+        channel: str,
+        checked: Sequence[tuple[Footage, Checked]],
+        checklist: Checklist | None,
+    ) -> ReplyMedia | None:
+        max_bytes = self._capabilities[channel].max_media_bytes
+        worst = _worst(checked)
+        passed = next(((f, c.passed) for f, c in checked if c.passed is not None), None)
+        if max_bytes <= 0 or (worst is None and passed is None):
+            if checklist is not None:
+                await checklist.skip("clip", "No clip to make")
+            return None
+        if checklist is not None:
+            await checklist.start("clip")
+        media: ReplyMedia | None = None
+        try:
+            if worst is not None:
+                footage, violation = worst
+                found = await self._repository.violations(footage.id)
+                number = [v.id for v in found].index(violation.id) + 1
+                clip = await self.clip(footage, violation, number, len(found), max_bytes)
+                media = clip.media[0] if clip.media else None
+            elif passed is not None:
+                footage, (span, marks) = passed
+                key = await self._render(footage, span, marks, f"{footage.id}-passed")
+                if (await self._blobs.local_path(key)).stat().st_size <= max_bytes:
+                    media = ReplyMedia(kind="video", blob_key=key)
+        except VideoToolsError:
+            logger.exception("could not make the result clip for line %s", line.id)
+        if checklist is not None:
+            if media is None:
+                await checklist.skip("clip", "Couldn't make the clip")
+            else:
+                await checklist.finish("clip", "Made the clip")
+        return media
+
+    async def _result_buttons(
+        self, line: Line, checked: Sequence[tuple[Footage, Checked]], footage_ids: Sequence[str]
+    ) -> tuple[Button, ...]:
+        buttons: list[Button] = []
+        for footage, result in checked:
+            count = sum(len(o.violations) for o in result.outcomes)
+            if count > 1:
+                label = f"Show all clips ({count})"
+                buttons.append(Button(label=label, value=f"/clip {footage.id} 1"))
+                break
+        footage = await self._repository.line_footage(line.id)
+        older = [f for f in footage if f.id not in footage_ids]
+        if is_sample_line(line):
+            buttons.append(Button(label="Send my own video", value="/send_video"))
+        elif older:
+            buttons.append(Button(label="Check older footage", value=f"/older {line.id}"))
+        else:
+            buttons.append(Button(label="Send another video", value="/send_video"))
+        buttons.append(Button(label="Add a rule", value="/add_rule"))
+        return tuple(buttons)
+
+    # Named by what is drawn, so a rerun that changes the boxes renders a new clip.
+    async def _render(self, footage: Footage, span: TimeSpan, marks: ProofMarks, name: str) -> str:
+        drawn = hashlib.sha256(_MARKS.dump_json(marks)).hexdigest()[:12]
+        key = f"proof/{name}-{drawn}.mp4"
+        if await self._blobs.exists(key):
+            return key
+        source = await self._blobs.local_path(footage.original_key)
+        with tempfile.TemporaryDirectory() as workdir:
+            destination = Path(workdir) / "clip.mp4"
+            if marks.marks:
+                await self._clips.make_clip(source, destination, span, marks.marks)
+            else:
+                await self._video.cut_clip(source, destination, span)
+            await self._blobs.write_file(key, destination)
+        return key
 
     async def rule_numbers(self, line_id: str) -> dict[str, int]:
         rules = [rule for rule in await self._repository.rules(line_id) if rule.active]
@@ -345,17 +485,24 @@ class Analysis:
         rules: Sequence[Rule],
         numbers: Mapping[str, int],
         scope: BudgetScope,
+        checklist: Checklist,
     ) -> Checked:
         spans = await self.active_spans(footage)
         tracked = tuple(tracking_spec(rule.spec) for rule in rules)
         plan = self._planner.plan(
             self._settings.strategy, PlanInput(footage, spans, tracked, self._settings.fps)
         )
-        result = await self._runner.run(footage, plan, self._segmenters.video(scope))
+        await checklist.start("find")
+
+        async def finding(done: int, total: int) -> None:
+            await checklist.count("find", done, total)
+
+        result = await self._runner.run(footage, plan, self._segmenters.video(scope), finding)
         charges = list(result.charges)
         line, zone_charges = await self._find_zones(line, footage, spans, rules, scope)
         charges += zone_charges
         tracks = naive_tracks(footage.id, result.observations, max(1.0, 3 / self._settings.fps))
+        await checklist.finish("find", _found_text(rules, [t.concept for t in tracks]))
         scene = Scene(footage.id, footage.duration_s, tracks, result.observations, line.zones)
         judged: dict[str, tuple[Check, ...]] = {}
         skipped: list[str] = []
@@ -368,21 +515,35 @@ class Analysis:
                 continue
             for concept, wanted in still_times(rule.spec, judged[rule.id]).items():
                 times[concept] |= wanted
-        looks = await self._parts.look(footage, times, self._segmenters.image(scope))
+        if checklist.has("parts"):
+            await checklist.start("parts")
+
+        async def looking(done: int, total: int) -> None:
+            await checklist.count("parts", done, total)
+
+        looks = await self._parts.look(footage, times, self._segmenters.image(scope), looking)
+        if checklist.has("parts"):
+            items = len({c.track_id for found in judged.values() for c in found})
+            await checklist.finish("parts", _looked_text(rules, items))
         charges += looks.charges
         scene = dataclasses.replace(scene, observations=scene.observations + looks.observations)
+        await checklist.start("rules")
         outcomes: list[RuleOutcome] = []
+        passed: tuple[TimeSpan, ProofMarks] | None = None
         for rule in rules:
             if rule.id not in judged:
                 continue
             found = evaluate(rule.id, rule.spec, scene)
-            await self._save_marks(rule.spec, scene, judged[rule.id], found)
+            items = await self._save_marks(rule.spec, scene, judged[rule.id], found)
             number = numbers.get(rule.id, 0)
             outcomes.append(RuleOutcome(number, rule, len(judged[rule.id]), found))
+            if passed is None:
+                passed = passed_marks(items, judged[rule.id], footage.duration_s)
         violations = [v for outcome in outcomes for v in outcome.violations]
         await self._repository.replace_violations(footage.id, list(judged), violations)
+        await checklist.finish("rules", f"Checked {len(rules)} {plural('rule', len(rules))}")
         cost = CostEstimate(charges=tuple(charges)).total_usd
-        return Checked(line, tuple(outcomes), cost, tuple(skipped))
+        return Checked(line, tuple(outcomes), cost, tuple(skipped), passed)
 
     # What each proof clip draws is saved now, while the tracks are at hand, so a clip asked
     # for later shows exactly the boxes this check decided on.
@@ -392,7 +553,7 @@ class Analysis:
         scene: Scene,
         judged: Sequence[Check],
         found: Sequence[Violation],
-    ) -> None:
+    ) -> dict[str, Item]:
         items = {
             item.track.track_id: item
             for item in build_items(spec, scene.tracks, scene.observations, {})
@@ -403,6 +564,7 @@ class Analysis:
                 continue
             marks = proof_marks(violation, items, judged, failed)
             await self._blobs.write(_marks_key(violation.id), _MARKS.dump_json(marks))
+        return items
 
     # Areas a rule names but nobody drew are found by text on one still, then kept on the line
     # so the next recording of the same camera needs no call.
@@ -482,46 +644,55 @@ class Analysis:
 _MARKS = TypeAdapter(ProofMarks)
 
 
-# A check can take minutes, so its progress message says how long it has run, every half
-# minute. Only a cue: if the chat refuses an update, the check goes on.
-class _Progress:
-    def __init__(self, notifier: Notifier, channel: str, chat_id: str, key: str, text: str) -> None:
-        self._notifier = notifier
-        self._channel = channel
-        self._chat_id = chat_id
-        self._key = key
-        self._text = text
-        self._task: asyncio.Task[None] | None = None
-
-    async def __aenter__(self) -> None:
-        await self._show(self._text)
-        self._task = asyncio.create_task(self._tick())
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            await asyncio.wait([self._task])
-
-    async def _tick(self) -> None:
-        started = time.monotonic()
-        while True:
-            await asyncio.sleep(PROGRESS_EVERY_S)
-            elapsed = duration_text(time.monotonic() - started)
-            try:
-                await self._show(f"{self._text} {elapsed} so far.")
-            except ChannelError:
-                logger.warning("could not update progress in chat %s", self._chat_id, exc_info=True)
-                return
-
-    async def _show(self, text: str) -> None:
-        await self._notifier.progress(self._channel, self._chat_id, self._key, text)
+def _result_text(
+    checked: Sequence[tuple[Footage, Checked]], media: ReplyMedia | None, problems: Sequence[str]
+) -> str:
+    worst = _worst(checked)
+    clipped = worst[1] if worst is not None and media is not None else None
+    sections: list[str] = []
+    for footage, result in checked:
+        blocks = [rule_result(o, clipped if clipped in o.violations else None)
+                  for o in result.outcomes]  # fmt: skip
+        blocks += result.skipped
+        if len(checked) > 1:
+            blocks.insert(0, f"*{footage_name(footage)}* ({video_length(footage.duration_s)})")
+        sections.append("\n\n".join(blocks))
+    if media is not None and worst is None and checked:
+        entities = sorted({plural(o.rule.spec.entity.phrase, 2)
+                           for _, result in checked for o in result.outcomes})  # fmt: skip
+        sections.append(
+            f"Here's what I checked: the {join_words(entities)} I judged are drawn in green."
+        )
+    sections += problems
+    return "\n\n".join(sections) or "There was nothing to check."
 
 
-def _footage_summary(footage: Footage, checked: Checked) -> str:
-    parts = [f"*{footage_name(footage)}* ({duration_text(footage.duration_s)})"]
-    parts += [rule_summary(outcome) for outcome in checked.outcomes]
-    parts += checked.skipped
-    return "\n\n".join(parts)
+# The first failure of an item, in the recording and rule with the most failures.
+def _worst(checked: Sequence[tuple[Footage, Checked]]) -> tuple[Footage, Violation] | None:
+    best: tuple[int, Footage, Violation] | None = None
+    for footage, result in checked:
+        for outcome in result.outcomes:
+            items = sorted((v for v in outcome.violations if v.track_id is not None),
+                           key=lambda v: v.t)  # fmt: skip
+            if items and (best is None or len(items) > best[0]):
+                best = (len(items), footage, items[0])
+    return None if best is None else (best[1], best[2])
+
+
+def _found_text(rules: Sequence[Rule], concepts: Sequence[str]) -> str:
+    entities = sorted({rule.spec.entity.phrase for rule in rules})
+    counts = Counter(concepts)
+    found = [f"{counts[e]} {plural(e, counts[e])}" for e in entities if counts[e]]
+    if not found:
+        return f"Found no {join_words([plural(e, 2) for e in entities])}"
+    return f"Found {join_words(found)}"
+
+
+def _looked_text(rules: Sequence[Rule], items: int) -> str:
+    parts = sorted({phrase for rule in rules for phrase in checkpoint_parts(rule.spec)})
+    entities = {rule.spec.entity.phrase for rule in rules}
+    what = plural(next(iter(entities)), items) if len(entities) == 1 else plural("item", items)
+    return f"Looked for {join_words([plural(p, 2) for p in parts])} on {items} {what}"
 
 
 def clip_buttons(footage: Footage, number: int, count: int) -> tuple[Button, ...]:

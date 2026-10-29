@@ -1,7 +1,18 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from rewind.contracts import Checkpoint, EndOfFootage, EntersZone, ExitsView, Rule, Violation
+from rewind.contracts import (
+    Checkpoint,
+    CountAtLeast,
+    EndOfFootage,
+    EntersZone,
+    ExitsView,
+    Has,
+    InZone,
+    Rule,
+    RuleSpec,
+    Violation,
+)
 from rewind.core.analysis.proof import short_reason
 
 EXAMPLES = 3
@@ -19,6 +30,12 @@ class RuleOutcome:
 def clock_time(t: float) -> str:
     minutes, seconds = divmod(int(t), 60)
     return f"{minutes:02d}:{seconds:02d}"
+
+
+# "0:42", "12:30": how long a video is, the way a video player shows it.
+def video_length(seconds: float) -> str:
+    minutes, rest = divmod(round(seconds), 60)
+    return f"{minutes}:{rest:02d}"
 
 
 def duration_text(seconds: float) -> str:
@@ -40,30 +57,76 @@ def concept_of(violation: Violation) -> str | None:
     return None if violation.track_id is None else violation.track_id.rpartition("#")[0]
 
 
-# "Rule 1 · Every box needs a label.\n❌ 2 of 9 boxes failed: the boxes at 00:04 and 00:14."
-def rule_summary(outcome: RuleOutcome) -> str:
-    entity = outcome.rule.spec.entity.phrase
-    title = f"Rule {outcome.number} · {outcome.rule.text}"
+# A rule as one plain sentence: "every box has a label when it leaves the view".
+def rule_sentence(spec: RuleSpec) -> str:
+    entity = spec.entity.phrase
+
+    def part(key: str) -> str:
+        return spec.parts.get(key, key.replace("_", " "))
+
+    clauses: list[str] = []
+    for requirement in spec.requirements:
+        match requirement.predicate:
+            case Has(part=key):
+                text = f"has {_article(part(key))} {part(key)}"
+            case CountAtLeast(part=key, n=n):
+                text = f"has at least {n} {plural(part(key), n)}"
+            case InZone(zone=zone):
+                text = f"is in the {_zone(zone)}"
+        if requirement.timing == "ever_before":
+            text += " at some point"
+        clauses.append(text)
+    clauses += [f"gets its {part(step.first)} before its {part(step.then)}" for step in spec.order]
+    sentences: list[str] = []
+    if clauses:
+        sentences.append(f"every {entity} {join_words(clauses)} {_when(spec.checkpoint)}")
+    if spec.dwell is not None:
+        sentences.append(
+            f"no {entity} stays in the {_zone(spec.dwell.zone)} longer than {spec.dwell.max_s:g} s"
+        )
+    if spec.rate is not None:
+        sentences.append(
+            f"at least {spec.rate.min_per_minute:g} {plural(entity, 2)} pass every minute"
+        )
+    return "; ".join(sentences)
+
+
+# One block per rule for the result message:
+# "❌ *2 of 9 boxes left the view without a label*\nThe box at 00:14 is the first one (in red).
+# \nRule 1 · every box has a label when it leaves the view."
+def rule_result(outcome: RuleOutcome, clipped: Violation | None) -> str:
+    spec = outcome.rule.spec
+    entity = spec.entity.phrase
     items = [v for v in outcome.violations if v.track_id is not None]
     line_wide = [v for v in outcome.violations if v.track_id is None]
     failed = len({v.track_id for v in items})
     judged = max(outcome.judged, failed)
-    lines = [title]
-    # Only items seen reaching the checkpoint are judged, so the count says which ones they are.
-    which = _reached(outcome.rule.spec.checkpoint)
+    lines: list[str] = []
+    moment = _moment(spec.checkpoint)
+    needed = _single_part(spec)
     if failed:
+        what = f"{moment} without {_article(needed)} {needed}" if needed else "broke the rule"
+        what = what.strip()
+        lines.append(f"❌ *{failed} of {judged} {plural(entity, judged)} {what}*")
         times = sorted(set(map(clock_time, (v.t for v in items))))
-        lead = ", for example" if len(times) > EXAMPLES else ":"
-        shown = plural(entity, min(failed, EXAMPLES))
-        lines.append(
-            f"❌ {failed} of {judged} {plural(entity, judged)}{which} failed{lead} "
-            f"the {shown} at {_join(times[:EXAMPLES])}."
-        )
+        if clipped is not None and clipped.track_id is not None:
+            first = clock_time(clipped.t)
+            lines.append(f"The {entity} at {first} is the one in the clip (in red).")
+            times = [t for t in times if t != first]
+            if times:
+                more = ", for example" if len(times) > EXAMPLES else ""
+                lines.append(f"Others{more}: {join_words(times[:EXAMPLES])}.")
+        else:
+            lead = ", for example" if len(times) > EXAMPLES else ""
+            lines.append(f"At{lead} {join_words(times[:EXAMPLES])}.")
     elif judged:
-        lines.append(f"✅ All {judged} {plural(entity, judged)}{which} passed.")
+        that = f" that {moment}" if moment else ""
+        had = f"had {_article(needed)} {needed}" if needed else "passed"
+        lines.append(f"✅ *All {judged} {plural(entity, judged)}{that} {had}.*")
     elif not line_wide:
         lines.append(f"No {entity} reached the point where this rule checks it.")
     lines += [f"❌ {clock_time(v.t)}: {v.reason}." for v in line_wide[:EXAMPLES]]
+    lines.append(f"Rule {outcome.number} · {rule_sentence(spec)}.")
     return "\n".join(lines)
 
 
@@ -81,17 +144,46 @@ def violation_line(violation: Violation, rule_number: int | None) -> str:
     return f"{clock_time(violation.t)} · the {concept}: {violation.reason} ({rule})"
 
 
-def _reached(checkpoint: Checkpoint) -> str:
+# The part a rule asks for, when it asks for exactly one at its checkpoint; it names the failure.
+def _single_part(spec: RuleSpec) -> str | None:
+    if spec.order or len(spec.requirements) != 1:
+        return None
+    match spec.requirements[0].predicate:
+        case Has(part=key):
+            return spec.parts.get(key, key)
+        case _:
+            return None
+
+
+def _moment(checkpoint: Checkpoint) -> str:
     match checkpoint:
         case ExitsView():
-            return " that left the view"
+            return "left the view"
         case EntersZone(zone=zone):
-            return f" that entered {zone.replace('_', ' ')}"
+            return f"entered the {_zone(zone)}"
         case EndOfFootage():
             return ""
 
 
-def _join(words: Sequence[str]) -> str:
+def _when(checkpoint: Checkpoint) -> str:
+    match checkpoint:
+        case ExitsView():
+            return "when it leaves the view"
+        case EntersZone(zone=zone):
+            return f"when it enters the {_zone(zone)}"
+        case EndOfFootage():
+            return "by the end of the video"
+
+
+def _zone(key: str) -> str:
+    return key.replace("_", " ")
+
+
+def _article(phrase: str | None) -> str:
+    return "an" if (phrase or "")[:1].lower() in ("a", "e", "i", "o", "u") else "a"
+
+
+def join_words(words: Sequence[str]) -> str:
     if len(words) <= 1:
         return "".join(words)
     return ", ".join(words[:-1]) + " and " + words[-1]
