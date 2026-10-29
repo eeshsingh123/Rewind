@@ -27,13 +27,18 @@ from rewind.contracts import (
     Rule,
     RuleSpec,
     TimeSpan,
+    Violation,
 )
 from rewind.core.analysis import (
     ANALYZE_JOB,
     INGEST_JOB,
     Analysis,
     AnalysisSettings,
+    Insights,
+    InsightWriter,
     Mark,
+    RuleOutcome,
+    rule_result,
 )
 from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, Ledger
 from rewind.core.conversation import (
@@ -70,6 +75,7 @@ from rewind.core.ports import (
 )
 from rewind.core.rules import RuleCompiler
 from tests.fakes import CAPABILITIES, FakeChannel, ScriptedModel, completion
+from tests.test_insights import FakeSheet
 
 pytestmark = pytest.mark.anyio
 
@@ -226,6 +232,9 @@ async def setup(tmp_path: Path) -> AsyncIterator[Setup]:
         planner=Planner(STRATEGIES), runner=PerceptionRunner(proxies, observations),
         observations=observations, segmenters=Segmenters(sam, ledger),
         compiler_for=no_compiler, video=video, stills=video, clips=video,
+        insights=Insights(
+            repository, blobs, FakeSheet(), lambda _: InsightWriter(ScriptedModel([]), blobs)
+        ),
         notifier=Outbox({"telegram": channel}), capabilities={"telegram": CAPABILITIES},
         settings=AnalysisSettings(fps=2.0),
     )  # fmt: skip
@@ -285,7 +294,8 @@ async def test_a_check_reports_each_rule_plainly_draws_the_proof_and_a_rerun_is_
     assert last.startswith("Checked your video in ")
     assert last.endswith(
         "· $0.00\n\n✓ Video received\n✓ Video read (0:10)\n✓ Found the cartons\n"
-        "✓ Looked for shipping labels on 2 cartons\n✓ Checked 1 rule\n✓ Made the clip"
+        "✓ Looked for shipping labels on 2 cartons\n✓ Checked 1 rule\n✓ Nothing unusual\n"
+        "✓ Made the clip"
     )
     assert clip.caption == ("Rule 1 · clip 1 of 1\nThe carton at 00:03: no shipping label.")
     # The result's clip is made once and reused when the same clip is asked for again.
@@ -413,3 +423,23 @@ async def test_a_rule_read_back_and_confirmed_checks_the_video_already_sent(
     assert "Rule 1 · every carton" in caption
     assert "Rule 2 · every carton" in caption
     assert not chat.model.requests
+
+
+def _outcome(judged: int, failed: int) -> RuleOutcome:
+    rule = Rule(
+        id="rule-1", line_id="line-1", text="Every carton needs a label before it leaves.",
+        normalized_text="every carton needs a label before it leaves", spec=CARTON_RULE,
+        created_at=NOW,
+    )  # fmt: skip
+    violations = tuple(
+        Violation(id=f"v{i}", rule_id=rule.id, footage_id="f1", track_id=f"carton#{i}",
+                  t=float(i), reason="no shipping label when it left the view",
+                  clip=TimeSpan(start=0, end=float(i) + 1))
+        for i in range(failed)
+    )  # fmt: skip
+    return RuleOutcome(1, rule, judged, violations)
+
+
+def test_nearly_every_item_lacking_the_part_says_the_name_may_not_match_the_look() -> None:
+    assert "I may not recognise it by that name" in rule_result(_outcome(10, 9), None)
+    assert "I may not recognise it by that name" not in rule_result(_outcome(18, 2), None)

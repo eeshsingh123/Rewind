@@ -20,6 +20,7 @@ from rewind.contracts import (
     Line,
     Rule,
     RuleSpec,
+    TimeSpan,
 )
 from rewind.core.analysis import (
     ANALYZE_JOB,
@@ -83,6 +84,15 @@ class RecordingArguments(ToolArguments):
     line: str | None = None
     # A recording's file name, or "all"; the newest recording when left out.
     recording: str | None = None
+
+
+class AskArguments(ToolArguments):
+    question: str
+    line: str | None = None
+    recording: str | None = None
+    # A stretch of the recording the question is about, in seconds from its start.
+    from_s: float | None = None
+    to_s: float | None = None
 
 
 class ClipArguments(ToolArguments):
@@ -518,6 +528,28 @@ class Findings:
             self._clip,
         )
 
+    def ask_tool(self) -> ToolSpec[AskArguments]:
+        return ToolSpec(
+            "ask_footage",
+            "Answer a question about what happened in a checked recording: when failures started, "
+            "how often, patterns, stops, pace, a stretch of time, or how it compares with the "
+            "line's other recordings. Pass the person's question as written; pass from_s and to_s "
+            "when it names a stretch of time. The answer is sent as it is.",
+            AskArguments,
+            self._ask,
+        )
+
+    # /insight <footage id> <insight id>: the clip behind one line of a result or an answer.
+    async def insight_command(self, context: TurnContext, argument: str) -> AgentReply:
+        footage_id, _, insight_id = argument.partition(" ")
+        footage = await self._repository.get_footage(footage_id)
+        insight = None if footage is None else await self._analysis.insight(footage, insight_id)
+        if footage is None or insight is None:
+            return AgentReply("I can't find that clip any more.")
+        max_bytes = self._capabilities[context.chat.channel].max_media_bytes
+        clip = await self._analysis.insight_clip(footage, insight, max_bytes)
+        return AgentReply("" if clip.media else clip.caption, (), clip.media)
+
     async def clip_command(self, context: TurnContext, argument: str) -> AgentReply:
         footage_id, _, number = argument.partition(" ")
         footage = await self._repository.get_footage(footage_id)
@@ -568,6 +600,28 @@ class Findings:
         return ToolResult(
             f"the clip is attached to your reply: {clip.caption}", buttons, clip.media
         )
+
+    async def _ask(self, context: TurnContext, arguments: AskArguments) -> ToolResult:
+        line = await resolve_line(self._repository, context.workspace_id, arguments.line)
+        (footage,) = (await resolve_footage(self._repository, line, arguments.recording))[-1:]
+        window = None
+        if arguments.from_s is not None or arguments.to_s is not None:
+            start = max(0.0, arguments.from_s or 0.0)
+            end = min(footage.duration_s, arguments.to_s or footage.duration_s)
+            if end <= start:
+                raise ToolError(
+                    f"{footage_name(footage)} is {video_length(footage.duration_s)} long; "
+                    "that stretch is not in it"
+                )
+            window = TimeSpan(start=start, end=end)
+        answer = await self._analysis.ask(context.workspace_id, footage, arguments.question, window)
+        if answer is None:
+            raise ToolError(f"{footage_name(footage)} has not been checked yet; check it first")
+        buttons: tuple[Button, ...] = ()
+        if answer.insight is not None:
+            value = f"/insight {footage.id} {answer.insight.id}"
+            buttons = (Button(label=f"▶ {answer.insight.label}", value=value),)
+        return ToolResult(answer.text, buttons, reply=answer.text)
 
     async def _make_clip(
         self, context: TurnContext, footage: Footage, number: int

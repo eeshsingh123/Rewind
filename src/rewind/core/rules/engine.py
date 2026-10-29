@@ -129,15 +129,15 @@ def _zones(spec: RuleSpec, scene: Scene) -> dict[str, Zone]:
 # the frame was lost (occluded, or missed by the segmenter), and an item never seen whole cannot be
 # checked; neither is judged, so a finding never rests on a moment the camera did not show.
 def _exit_check(item: Item, duration_s: float) -> Check | None:
-    if item.end >= duration_s - EXIT_MARGIN_S or not _at_border(item.path[-1].box):
+    if item.end >= duration_s - EXIT_MARGIN_S or not at_border(item.path[-1].box):
         return None
-    whole = [o.t for o in item.path if not _at_border(o.box)]
+    whole = [o.t for o in item.path if not at_border(o.box)]
     if not whole:
         return None
     return Check(item.track.track_id, item.end, whole[-1])
 
 
-def _at_border(box: Box) -> bool:
+def at_border(box: Box) -> bool:
     return (
         box.x0 <= EDGE_MARGIN
         or box.y0 <= EDGE_MARGIN

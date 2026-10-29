@@ -18,6 +18,14 @@ from rewind.core.analysis.analysis import (
     is_sample_line,
     sample_line_id,
 )
+from rewind.core.analysis.facts import Tile
+from rewind.core.analysis.insights import (
+    Answer,
+    Insights,
+    InsightWriter,
+    SavedInsight,
+    SheetMaker,
+)
 from rewind.core.analysis.parts import StillGrabber, checkpoint_parts, tracking_spec
 from rewind.core.analysis.progress import Checklist, Notifier, Step, about_time
 from rewind.core.analysis.proof import ClipMaker, Mark, ProofMarks, Sighting, short_reason
@@ -40,21 +48,27 @@ __all__ = [
     "INGEST_JOB",
     "Analysis",
     "AnalysisSettings",
+    "Answer",
     "CheckRequest",
     "Checklist",
     "Clip",
     "ClipMaker",
     "Estimate",
     "FootageEstimate",
+    "InsightWriter",
+    "Insights",
     "Mark",
     "Notifier",
     "ProofMarks",
     "Read",
     "RuleOutcome",
+    "SavedInsight",
     "Segmenters",
+    "SheetMaker",
     "Sighting",
     "Step",
     "StillGrabber",
+    "Tile",
     "about_time",
     "check_header",
     "check_payload",

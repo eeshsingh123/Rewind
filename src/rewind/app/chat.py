@@ -8,10 +8,18 @@ from rewind.adapters.channels.whatsapp import WhatsAppChannel
 from rewind.adapters.jobs.in_process import InProcessJobRunner
 from rewind.adapters.models.muse import PRICES, MuseLanguageModel
 from rewind.adapters.storage.sql import SqlRepository
+from rewind.adapters.video.contact_sheet import OpenCvContactSheet
 from rewind.adapters.video.proof_clip import OpenCvProofClips
 from rewind.app.perception import Perception
 from rewind.app.settings import Settings
-from rewind.core.analysis import ANALYZE_JOB, INGEST_JOB, Analysis, AnalysisSettings
+from rewind.core.analysis import (
+    ANALYZE_JOB,
+    INGEST_JOB,
+    Analysis,
+    AnalysisSettings,
+    Insights,
+    InsightWriter,
+)
 from rewind.core.budget import BudgetedLanguageModel, BudgetScope, TokenPrices
 from rewind.core.conversation import (
     INSTRUCTIONS,
@@ -104,6 +112,12 @@ def build_chat(
         video=perception.video_tools,
         stills=perception.video_tools,
         clips=OpenCvProofClips(),
+        insights=Insights(
+            repository,
+            blobs,
+            OpenCvContactSheet(),
+            lambda workspace_id: InsightWriter(model_for(workspace_id), blobs),
+        ),
         notifier=outbox,
         capabilities=capabilities,
         settings=AnalysisSettings(fps=settings.track_fps),
@@ -137,6 +151,7 @@ def build_chat(
             analyze.tool(),
             findings.violations_tool(),
             findings.clip_tool(),
+            findings.ask_tool(),
         ]
     )
     conversation = Conversation(
@@ -160,6 +175,7 @@ def build_chat(
             "/older": analyze.older,
             "/clip": findings.clip_command,
             "/clips": findings.clips_command,
+            "/insight": findings.insight_command,
         },
     )
     jobs.register(TURN_JOB, conversation.handle_job)

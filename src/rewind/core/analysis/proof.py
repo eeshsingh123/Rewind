@@ -45,6 +45,11 @@ class ClipMaker(Protocol):
         ...
 
 
+# What a violation's clip draws, saved when it was found.
+def marks_key(violation_id: str) -> str:
+    return f"proof/{violation_id}.json"
+
+
 # "no label when it left the view; tape came before flap" -> "no label · tape came before flap"
 def short_reason(reason: str) -> str:
     return " · ".join(_MOMENT.sub("", part) for part in reason.split("; "))

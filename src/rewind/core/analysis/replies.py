@@ -16,6 +16,10 @@ from rewind.contracts import (
 from rewind.core.analysis.proof import short_reason
 
 EXAMPLES = 3
+# When nearly every item lacks the part, the likelier story is that the part's name does not
+# match how it looks on camera, so the result says so rather than reporting a broken line.
+SUSPECT_SHARE = 0.8
+SUSPECT_FROM = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +123,12 @@ def rule_result(outcome: RuleOutcome, clipped: Violation | None) -> str:
         else:
             lead = ", for example" if len(times) > EXAMPLES else ""
             lines.append(f"At{lead} {join_words(times[:EXAMPLES])}.")
+        if needed and judged >= SUSPECT_FROM and failed >= SUSPECT_SHARE * judged:
+            lines.append(
+                f"Nearly every {entity} failed, so look at the clip first: if they do have "
+                f"{_article(needed)} {needed}, I may not recognise it by that name. Try saying "
+                "how it looks, such as its colour or what is printed on it."
+            )
     elif judged:
         that = f" that {moment}" if moment else ""
         had = f"had {_article(needed)} {needed}" if needed else "passed"
