@@ -80,7 +80,8 @@ class TelegramChannel:
         self._base = f"{API_BASE}/bot{token}"
         self._file_base = f"{API_BASE}/file/bot{token}"
         self._blobs = blobs
-        self._progress: dict[tuple[str, str], int] = {}
+        # Per (chat, key): the progress message's id and what it shows now.
+        self._progress: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
 
     @property
     def name(self) -> str:
@@ -112,13 +113,18 @@ class TelegramChannel:
         self, chat_id: str, key: str, text: str, buttons: tuple[Button, ...] = ()
     ) -> None:
         markup = _keyboard(buttons[: CAPABILITIES.max_buttons])
-        message_id = self._progress.get((chat_id, key))
-        if message_id is not None:
-            body = _text_body(chat_id, _html(text), markup) | {"message_id": message_id}
-            await self._call("editMessageText", body)
+        body = _text_body(chat_id, _html(text), markup)
+        shown = self._progress.get((chat_id, key))
+        if shown is not None:
+            message_id, last = shown
+            # Telegram refuses an edit that changes nothing.
+            if body == last:
+                return
+            await self._call("editMessageText", body | {"message_id": message_id})
+            self._progress[(chat_id, key)] = (message_id, body)
             return
-        sent = await self._call("sendMessage", _text_body(chat_id, _html(text), markup))
-        self._progress[(chat_id, key)] = int(sent["message_id"])
+        sent = await self._call("sendMessage", body)
+        self._progress[(chat_id, key)] = (int(sent["message_id"]), body)
 
     # The "/" menu in the chat: (command, what it does), in order.
     async def set_commands(self, commands: Sequence[tuple[str, str]]) -> None:

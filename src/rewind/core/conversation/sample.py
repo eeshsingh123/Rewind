@@ -50,30 +50,35 @@ class Sample:
     async def run(self, context: TurnContext, argument: str) -> AgentReply:
         if self._video is None:
             return AgentReply("There's no sample on this bot. Send me a video of your own line.")
+        chat = context.chat
+        # Reading the rule and sending the video take a while, so the tap is answered at once;
+        # this message then becomes the sample's introduction.
+        intro = context.reply_key
+        await self._notifier.progress(chat.channel, chat.chat_id, intro, "⏳ Getting the sample…")
         line = await self._line(context)
         rule = await self._rule(context, line)
-        caption = (
-            f"Sample: a short video of a parcel conveyor.\n"
+        said = (
+            "Here's the sample: a short video of a parcel conveyor.\n"
             f"The rule I'll check: *{rule_sentence(rule.spec)}*."
         )
-        chat = context.chat
+        await self._notifier.progress(chat.channel, chat.chat_id, intro, said)
+        key = f"{context.reply_key}-check"
         footage = await self._repository.line_footage(line.id)
         if footage:
-            media = ReplyMedia(kind="video", blob_key=footage[-1].original_key, caption=caption)
+            media = ReplyMedia(kind="video", blob_key=footage[-1].original_key)
             await self._notifier.notify(chat.channel, chat.chat_id, "", media=(media,))
             offer = await self._analyze.offer(
-                context, line, footage[-1:], (rule,), CheckRequest(title=SAMPLE_TITLE),
-                context.reply_key,
-            )  # fmt: skip
+                context, line, footage[-1:], (rule,), CheckRequest(title=SAMPLE_TITLE), key
+            )
             return AgentReply(offer.reply, offer.buttons, jobs=offer.jobs)
         footage_id = uuid.uuid4().hex
         original_key = f"footage/{footage_id}/{self._video.name}"
         await self._blobs.write_file(original_key, self._video)
-        media = ReplyMedia(kind="video", blob_key=original_key, caption=caption)
+        media = ReplyMedia(kind="video", blob_key=original_key)
         await self._notifier.notify(chat.channel, chat.chat_id, "", media=(media,))
         self._readings.start(Reading(footage_id, line.id, self._video.name))
         await self._notifier.progress(
-            chat.channel, chat.chat_id, context.reply_key, "✓ Video received\n⏳ Reading it…"
+            chat.channel, chat.chat_id, key, "✓ Video received\n⏳ Reading it…"
         )
         payload = {
             "workspace_id": context.workspace_id,
@@ -82,7 +87,7 @@ class Sample:
             "original_key": original_key,
             "channel": chat.channel,
             "chat_id": chat.chat_id,
-            "progress_key": context.reply_key,
+            "progress_key": key,
             "title": SAMPLE_TITLE,
         }
         return AgentReply("", jobs=(Job(INGEST_JOB, payload),))
