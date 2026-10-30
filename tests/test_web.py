@@ -88,8 +88,9 @@ def _answering(claim: dict[str, JsonValue]) -> list[Completion]:
     return [
         completion("", _call("find", {"thing": "carton"})),
         completion("", _call("look", {"question": "Does it have a label?", "thing": "carton"})),
-        completion(json.dumps({"tiles": [{"tile": "1", "answer": "no label"},
-                                         {"tile": "2", "answer": "has a label"}]})),
+        completion(json.dumps({"tiles": [{"tile": "1", "verdict": "no", "answer": "no label"},
+                                         {"tile": "2", "verdict": "yes",
+                                          "answer": "has a label"}]})),
         completion("", _call("answer", {"claims": [claim]})),
     ]  # fmt: skip
 
@@ -154,7 +155,7 @@ async def test_a_sample_answers_at_once_for_free(tmp_path: Path) -> None:
         completion(json.dumps(FIRST_LOOK)),
         *_answering({"text": NO_LABEL, "evidence": ["e4"]}),
         completion("", _call("answer", {"claims": [{"text": "Nothing else stands out.",
-                                                    "evidence": ["e1"]}]})),
+                                                    "evidence": ["e2"]}]})),
     ])  # fmt: skip
     sample = Sample("belt", "A belt", clip)
     async with serving(flow, model, sample) as client:

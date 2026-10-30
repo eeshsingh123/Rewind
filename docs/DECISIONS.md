@@ -46,6 +46,12 @@ Why: Muse is cheap and good at the whole picture; SAM and code make per-item cou
 
 **SAM tracks.** SAM's object ids are reused across items, so item identity is our own tracking. SAM follows at most 16 objects per request; when full, the rest of the window is sent again from that frame. Boxes are fractions of the frame (0..1), so they survive any proxy resolution.
 
+**Muse names what SAM searches for.** SAM depends heavily on the word: on the parcel clip "parcel" finds nothing, "box" misses soft parcels, and "package" finds everything but more in one frame than a request can follow. So Muse suggests up to 3 names from the footage, each is tried on three stills ($0.0025 each against about $0.05 for a pass), and the one or two that add the most are tracked. Two narrow names beat one broad one, and a name that finds nothing costs no pass. Only finds scoring 0.7 or more count, as a video request returns nothing below that.
+
+**One item, one track; Muse has the last word on what is an item.** Tracks are merged after the cache, so paid results stay valid: boxes that agree on shared frames are one item, and so is a thing seen again in the same place if, at its speed, it would have moved less than its own size in the gap. Speed is what keeps two boxes passing the same spot on a belt apart. A low score was not used to reject finds, as any cut-off would be tuned to one clip; Muse looks at each item once, and only a clear no removes it.
+
+**An area is a rectangle; Muse decides what is in the place.** A rectangle cannot follow a belt or a shelf, so what stands behind or in front of it falls inside. Code limits items to the rectangle, then Muse looks at each one with its surroundings, and only a clear no removes it. "The top half" stays exact: a tile cannot show it, so Muse says cannot tell and the rectangle decides. A mask was not used: it holds one frame's view of the belt, with holes where items cover it.
+
 **Stops are read from the footage's own pace.** `measure` calls a gap in output a stop when it is longer than 3× the usual gap between items (at least 5 s) and something shows it: nothing moved in view, or the items in view stood still. A gap with neither may be items SAM missed, so it is no stop.
 
 **Muse video.** `input_video` with a `file_id` from the Files API (MP4 only, set an expiry). Muse reads the visual sequence and any audio. The docs do not say how video is sampled or billed; on the 60 s jar clip it was 15.7k input tokens and 43 s.
@@ -75,3 +81,9 @@ Why: no runaway spend; webhook retries and agent loops are how costs usually blo
 ## Accuracy
 
 **The accuracy table is the proof.** Per-item precision and recall (a match is the same item within ±2 s), cost and run time, on hand-labelled real clips. Never cut.
+
+**A question is read before it is worked on.** Live, people had to word things exactly. One cheap Muse call with the first look and a frame turns the words into a thing, conditions and a part of the frame, and the reading is shown with the answer, so a wrong reading can be seen and corrected. It asks back only when two meanings give different answers, and only once: confirming every question would break "no setup".
+
+**Code combines, Muse judges.** `look` returns a verdict per item and `combine` applies AND/OR, so a list and its count are exact and checkable. Conditions stay separate unless the person says together or either.
+
+**The past-questions list lives in the browser.** The page has no login, so a list on the server would show everyone's footage, Telegram included, to anyone with the link.

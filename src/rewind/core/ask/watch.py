@@ -35,7 +35,8 @@ FIRST_LOOK = (
     "Watch all of this {length:.1f} s video.\n"
     "summary: two plain sentences on what it shows.\n"
     "moments: every notable moment (something stopping or starting, an item missing a part "
-    "or looking wrong, anything unusual), each with its start and end in seconds.\n"
+    "or looking wrong, anything unusual), each with its start and end in seconds. Something "
+    "true all through the video is not a moment: leave it out.\n"
     "questions: 3 to 5 short questions the person in charge would ask about this video and "
     "that the video can answer."
 )
@@ -50,7 +51,8 @@ PHOTO_FIRST_LOOK = (
 WATCH = (
     "This clip is {length:.1f} s long. Question: {question}\n"
     "answer: a plain answer from this clip only.\n"
-    "moments: the moments that back the answer, each with its start and end in seconds."
+    "moments: the moments that back the answer, each with its start and end in seconds. "
+    "Something true all through the clip is not a moment: leave it out."
 )
 
 _MOMENTS: dict[str, JsonValue] = {

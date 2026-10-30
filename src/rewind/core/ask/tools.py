@@ -1,11 +1,13 @@
+import asyncio
 import hashlib
 import json
+import logging
 import tempfile
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
@@ -22,12 +24,19 @@ from rewind.contracts import (
 from rewind.core.ask.areas import Area, AreaMarker, short_tag
 from rewind.core.ask.evidence import Evidence, Notebook
 from rewind.core.ask.marks import Mark, Sighting
-from rewind.core.ask.session import Marked, Session
+from rewind.core.ask.names import MAX_NAMES, NAME, NAMES_SCHEMA, NAMING, chosen_names, names_from
+from rewind.core.ask.session import Marked, OnStep, Session, Step
 from rewind.core.ask.sheets import SheetMaker, Tile
 from rewind.core.ask.stops import find_stops, usual_gap
-from rewind.core.ask.watch import Watcher
+from rewind.core.ask.watch import Moment, Watcher
 from rewind.core.ask.words import clock_time, join_words, plural
-from rewind.core.perception import PartLooker, PerceptionRunner, naive_tracks
+from rewind.core.perception import (
+    WINDOW_S,
+    PartLooker,
+    PerceptionRunner,
+    distinct_tracks,
+    naive_tracks,
+)
 from rewind.core.ports import (
     BlobStore,
     CompletionRequest,
@@ -39,9 +48,20 @@ from rewind.core.ports import (
     UserMessage,
 )
 
+logger = logging.getLogger(__name__)
+
 # A proof clip around one moment shows this long either side of it.
 AROUND_S = 2.0
+BROAD_SHARE = 0.8
 TILES_PER_SHEET = 9
+# Close looks sent to Muse at the same time.
+LOOKS_AT_ONCE = 4
+# Most items drawn on one combined proof.
+MAX_PROOF_TILES = 12
+# A second view of an item must show it at least this large, compared with its best view.
+SECOND_VIEW_SIZE = 0.5
+# Timed live on a 20 s clip at 2 fps: about 2 min, for one name or two tracked side by side.
+SAM_S_PER_FRAME = 2.5
 # Most items one look covers; past this, the agent is told to ask about fewer.
 MAX_LOOK_ITEMS = 45
 # What follow names the thing a person dragged a box around; look then takes it as a thing.
@@ -49,11 +69,28 @@ MARKED_THING = "marked thing"
 _FOLLOW_SHOWN_S = 10.0
 # Items listed by name in a result; the count always covers all of them.
 MAX_LISTED = 40
-_LOOK_PROMPT_VERSION = "2"
+_LOOK_PROMPT_VERSION = "3"
+_NAME_PROMPT_VERSION = "1"
+# Stills each name is tried on, and that Muse sees to name the thing.
+NAME_MOMENTS = 3
+CONFIRM = "Each tile shows one thing boxed in red, found by a search.\n"
+CONFIRM_QUESTION = (
+    "Could a person fairly call what is boxed one {}? Say no only when it is clearly something "
+    "else, such as part of a wall or the background, or only a piece of a bigger object."
+)
+PLACE = "Each tile shows one item boxed in red, with what is around it.\n"
+PLACE_QUESTION = (
+    "Is the boxed item in {0}? Say no only when it clearly is not, such as when it stands behind "
+    "or in front of {0} without touching it. When the tile cannot show that, say cannot tell."
+)
+
+type Verdict = Literal["yes", "no", "cannot tell", "other"]
 
 LOOKING = (
     "You look closely at numbered tiles cut from a photo or a video. Answer each tile from that "
-    "tile only, in a few plain words. Say 'cannot tell' when the tile does not show it."
+    "tile only. verdict: yes or no to the question; 'cannot tell' when the tile does not show "
+    "it; 'other' when it is not a yes or no question. answer: a few plain words that make sense "
+    "alone, such as 'no label' or 'flap open to the right', never just yes or no."
 )
 LOOK = "{boxed}Question for each tile: {question}"
 LOOK_SCHEMA: dict[str, JsonValue] = {
@@ -66,8 +103,12 @@ LOOK_SCHEMA: dict[str, JsonValue] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["tile", "answer"],
-                "properties": {"tile": {"type": "string"}, "answer": {"type": "string"}},
+                "required": ["tile", "verdict", "answer"],
+                "properties": {
+                    "tile": {"type": "string"},
+                    "verdict": {"type": "string", "enum": ["yes", "no", "cannot tell", "other"]},
+                    "answer": {"type": "string"},
+                },
             },
         }
     },
@@ -93,6 +134,14 @@ class Segmenters:
     image: Segmenter
 
 
+# One item's answer to one close-look question, and the view it was judged on.
+@dataclass(frozen=True, slots=True)
+class Judged:
+    item: Item
+    verdict: Verdict
+    tile: Tile
+
+
 # What one question has found so far.
 @dataclass(slots=True)
 class Bench:
@@ -105,6 +154,9 @@ class Bench:
     # Every paid call of the question, recorded as it is made, so a failed step still counts.
     charges: list[Charge] = field(default_factory=list[Charge])
     marked: Marked | None = None
+    # Each close-look question's answers, by item, for combine.
+    judged: dict[str, dict[str, Judged]] = field(default_factory=dict[str, dict[str, Judged]])
+    on_step: OnStep | None = None
 
     @property
     def footage(self) -> Footage:
@@ -190,7 +242,9 @@ class WatchArguments(Arguments):
 
 class FindArguments(Arguments):
     thing: str = Field(
-        min_length=1, description="One kind of thing as a short noun phrase: 'chair', 'person'."
+        min_length=1,
+        description="One kind of thing as a plain noun, with no place or condition: 'chair'. "
+        "Use area for a place and look for a condition.",
     )
     area: str | None = Field(None, description="Only in this area, named as area named it.")
 
@@ -227,6 +281,28 @@ class AreaArguments(Arguments):
 
 class FollowArguments(Arguments):
     pass
+
+
+class Condition(Arguments):
+    question: str = Field(min_length=1, description="A look question, word for word.")
+    want: Literal["yes", "no"] = Field(description="The answer an item must have to match.")
+
+
+class CombineArguments(Arguments):
+    conditions: list[Condition] = Field(min_length=1)
+    how: Literal["all", "any"] = Field(
+        "all", description="Must an item meet all the conditions, or any one of them?"
+    )
+    describe: str = Field(min_length=1, description="What a match is: 'boxes with no label'.")
+
+
+class _TileAnswer(BaseModel):
+    tile: str
+    verdict: Verdict = "cannot tell"
+    answer: str
+
+
+type _Subject = tuple[str, Tile, Item | None]
 
 
 class Toolset:
@@ -276,6 +352,15 @@ class Toolset:
                 self.look,
             ),
             ToolSpec(
+                "combine",
+                "Code combines the answers look gave, item by item, into the exact list and "
+                "count of the items that match, and those it could not tell. Call it once for "
+                "each list the person wants.",
+                CombineArguments,
+                lambda a: f"Listing {a.describe}",
+                self.combine,
+            ),
+            ToolSpec(
                 "measure",
                 "Code counts the items of a thing. In a video it also times them: the usual gap "
                 "between one and the next, stops in the flow, and how long each was in view.",
@@ -319,15 +404,15 @@ class Toolset:
         where = "In the whole video" if whole else f"From {_span_text(span)}"
         evidence = [
             notebook.add("seen", f"{where}: {watched.answer}", None if whole else span),
-            *(notebook.add("seen", f"{_span_text(m.span)}: {m.what}", _around(m.span, duration))
+            *(note_moment(notebook, m, duration, _around(m.span, duration))
               for m in watched.moments),
         ]  # fmt: skip
         return Outcome(tuple(evidence), f"Watched {_where(span, duration)}")
 
     async def find(self, bench: Bench, arguments: FindArguments) -> Outcome:
-        thing = _thing(arguments.thing)
+        thing = _known_thing(bench, arguments.thing)
         area = _area(bench, arguments.area)
-        items = _within(await self.items(bench, thing), area)
+        items = await self._inside(bench, thing, area)
         place = _in(area)
         clip, marks = _count_proof(bench, items, area)
         if not items:
@@ -343,8 +428,8 @@ class Toolset:
         area = _area(bench, arguments.area)
         subjects: list[tuple[str, Tile, Item | None]] = []
         if arguments.thing:
-            thing = _thing(arguments.thing)
-            items = _within(await self.items(bench, thing), area)
+            thing = _known_thing(bench, arguments.thing)
+            items = await self._inside(bench, thing, area)
             chosen = _chosen(items, arguments.items)
             subjects = [(i.label, Tile(i.best.t, i.best.box, ""), i) for i in chosen]
             what = f"{len(chosen)} {plural(thing, len(chosen))}"
@@ -362,27 +447,94 @@ class Toolset:
             raise ToolError("there is nothing to look at; find the thing first")
         if len(subjects) > MAX_LOOK_ITEMS:
             raise ToolError(f"that is {len(subjects)} items; ask about at most {MAX_LOOK_ITEMS}")
+        prompt = LOOK.format(boxed=boxed, question=arguments.question)
+        answers = await self._ask_tiles(bench, [tile for _, tile, _ in subjects], prompt)
+        subjects, answers = await self._second_views(bench, subjects, answers, prompt)
+        asked = bench.judged.setdefault(_thing(arguments.question), {})
         evidence: list[Evidence] = []
-        for first in range(0, len(subjects), TILES_PER_SHEET):
-            batch = subjects[first : first + TILES_PER_SHEET]
-            tiles = [Tile(tile.t, tile.box, str(n)) for n, (_, tile, _) in enumerate(batch, 1)]
-            prompt = LOOK.format(boxed=boxed, question=arguments.question)
-            answers = await self._ask_sheet(bench, tiles, prompt)
-            for (label, tile, item), shown in zip(batch, tiles, strict=True):
-                answer = answers.get(shown.label, "cannot tell")
-                clip = _around(TimeSpan(start=tile.t, end=tile.t), footage.duration_s)
-                marks = (
-                    *_area_marks(area),
-                    *(() if item is None else (_mark(item, clip, answer),)),
-                )
-                text = f"{label[0].upper()}{label[1:]}: {answer}"
-                evidence.append(bench.notebook.add("seen", text, clip, marks))
+        for (label, tile, item), answer in zip(subjects, answers, strict=True):
+            clip = _around(TimeSpan(start=tile.t, end=tile.t), footage.duration_s)
+            tag = _tag(answer, arguments.question)
+            marks = (*_area_marks(area), *(() if item is None else (_mark(item, clip, tag),)))
+            text = f"{label[0].upper()}{label[1:]}: {answer.answer} ({answer.verdict})"
+            evidence.append(bench.notebook.add("seen", text, clip, marks))
+            if item is not None:
+                asked[item.label] = Judged(item, answer.verdict, tile)
         return Outcome(tuple(evidence), f"Looked closer at {what}")
 
+    # An item that could not be judged on its best view gets one more, from another moment.
+    async def _second_views(
+        self, bench: Bench, subjects: list[_Subject], answers: list[_TileAnswer], prompt: str
+    ) -> tuple[list[_Subject], list[_TileAnswer]]:
+        again: list[tuple[int, _Subject]] = []
+        for index, (label, _, item) in enumerate(subjects):
+            view = None if item is None else _second_view(item)
+            if view is not None and answers[index].verdict == "cannot tell":
+                again.append((index, (label, Tile(view.t, view.box, ""), item)))
+        if not again:
+            return subjects, answers
+        seen = await self._ask_tiles(bench, [subject[1] for _, subject in again], prompt)
+        subjects, answers = list(subjects), list(answers)
+        for (index, subject), answer in zip(again, seen, strict=True):
+            if answer.verdict != "cannot tell":
+                subjects[index], answers[index] = subject, answer
+        return subjects, answers
+
+    # Sheets go to Muse side by side: one after another, a clip's look took minutes.
+    async def _ask_tiles(
+        self, bench: Bench, tiles: Sequence[Tile], prompt: str
+    ) -> list[_TileAnswer]:
+        batches = [tiles[i : i + TILES_PER_SHEET] for i in range(0, len(tiles), TILES_PER_SHEET)]
+        sheets = [[Tile(t.t, t.box, str(n)) for n, t in enumerate(b, 1)] for b in batches]
+        gate = asyncio.Semaphore(LOOKS_AT_ONCE)
+
+        async def ask(sheet: list[Tile]) -> dict[str, _TileAnswer]:
+            async with gate:
+                return await self._ask_sheet(bench, sheet, prompt)
+
+        answered = await asyncio.gather(*(ask(sheet) for sheet in sheets))
+        return [
+            found.get(tile.label, _TileAnswer(tile=tile.label, answer="cannot tell"))
+            for sheet, found in zip(sheets, answered, strict=True)
+            for tile in sheet
+        ]
+
+    async def combine(self, bench: Bench, arguments: CombineArguments) -> Outcome:
+        answers = [_answers_to(bench, c.question) for c in arguments.conditions]
+        wanted = [c.want for c in arguments.conditions]
+        labels = list(dict.fromkeys(label for asked in answers for label in asked))
+        results: list[tuple[Judged, bool | None]] = []
+        for label in labels:
+            got = [asked.get(label) for asked in answers]
+            states = [_meets(g, want) for g, want in zip(got, wanted, strict=True)]
+            judged = next(g for g in got if g is not None)
+            results.append((judged, _together(states, arguments.how)))
+        matched = [judged for judged, state in results if state]
+        unsure = [judged.item.label for judged, state in results if state is None]
+        count = f"{arguments.describe[0].upper()}{arguments.describe[1:]}: "
+        count += f"{len(matched)} of {len(results)}"
+        listed = join_words([j.item.label for j in matched[:MAX_LISTED]])
+        text = f"{count}: {listed}." if matched else f"{count}."
+        if unsure:
+            text += f" {len(unsure)} could not be told: {join_words(unsure[:MAX_LISTED])}."
+        # With no match the proof shows what was checked.
+        shown = (matched or [judged for judged, _ in results])[:MAX_PROOF_TILES]
+        sheet = await self._proof_sheet(bench, shown)
+        evidence = bench.notebook.add("seen", text, proof_key=sheet)
+        return Outcome((evidence,), f"{len(matched)} of {len(results)}: {arguments.describe}")
+
+    async def _proof_sheet(self, bench: Bench, shown: Sequence[Judged]) -> str:
+        photo = bench.session.photo
+        tiles = [
+            Tile(j.tile.t, j.tile.box, str(n) if photo else clock_time(j.tile.t))
+            for n, j in enumerate(shown, 1)
+        ]
+        return await self._sheet(bench, tiles)
+
     async def measure(self, bench: Bench, arguments: MeasureArguments) -> Outcome:
-        thing = _thing(arguments.thing)
+        thing = _known_thing(bench, arguments.thing)
         area = _area(bench, arguments.area)
-        items = _within(await self.items(bench, thing), area)
+        items = await self._inside(bench, thing, area)
         notebook = bench.notebook
         place = _in(area)
         clip, marks = _count_proof(bench, items, area)
@@ -432,14 +584,14 @@ class Toolset:
         else:
             t = min(max(arguments.at_s, 0.0), footage.duration_s)
             frame = f"the frame at {clock_time(t)}"
+        clip = _around(TimeSpan(start=t, end=t), footage.duration_s)
         area = await self._marker.mark(
             footage, name, t, bench.model, bench.segmenters.image, bench.charges
         )
         if area is None:
-            evidence = bench.notebook.add("seen", f"Could not make out {name} on {frame}.")
+            evidence = bench.notebook.add("seen", f"Could not make out {name} on {frame}.", clip)
             return Outcome((evidence,), f"Could not make out {name}")
         bench.areas[name] = area
-        clip = _around(TimeSpan(start=t, end=t), footage.duration_s)
         text = f"{name[0].upper()}{name[1:]} is marked on {frame}."
         evidence = bench.notebook.add("seen", text, clip, (area.mark,))
         return Outcome((evidence,), f"Marked {name}")
@@ -455,7 +607,8 @@ class Toolset:
         bench.charges += result.charges
         seen = sorted(result.observations, key=lambda o: o.t)
         if not seen:
-            evidence = bench.notebook.add("seen", "What was marked could not be followed.")
+            clip = _around(TimeSpan(start=marked.t, end=marked.t), footage.duration_s)
+            evidence = bench.notebook.add("seen", "What was marked could not be followed.", clip)
             return Outcome((evidence,), "Could not follow what you marked")
         track = Track(
             footage_id=footage.id,
@@ -483,60 +636,134 @@ class Toolset:
     async def items(self, bench: Bench, thing: str) -> tuple[Item, ...]:
         if thing in bench.found:
             return bench.found[thing]
-        look = self._on_photo if bench.session.photo else self._tracked
-        items = await look(bench, thing)
+        photo = bench.session.photo
+        moments = (0.0,) if photo else _moments(_spans(bench))
+        names = await self._names(bench, thing, moments)
+        look = self._on_photo if photo else self._tracked
+        tracks = await self._real(bench, names, await look(bench, thing, names, moments))
+        items = _placed(thing, tracks) if photo else _named(thing, tracks)
         bench.found[thing] = items
         return items
 
-    # One image call finds them all, however many; the still cache makes asking again free.
-    async def _on_photo(self, bench: Bench, thing: str) -> tuple[Item, ...]:
+    # An area is a rectangle, so what stands behind or in front of a belt or a shelf falls inside
+    # it. Muse sees each item where it is; it stays unless Muse is sure it is not in that place.
+    async def _inside(self, bench: Bench, thing: str, area: Area | None) -> tuple[Item, ...]:
+        items = _within(await self.items(bench, thing), area)
+        if area is None or not items:
+            return items
+        prompt = LOOK.format(boxed=PLACE, question=PLACE_QUESTION.format(area.name))
+        tiles = [Tile(item.best.t, item.best.box, "") for item in items]
+        answers = await self._ask_tiles(bench, tiles, prompt)
+        kept = zip(items, answers, strict=True)
+        return tuple(item for item, answer in kept if answer.verdict != "no")
+
+    # What to call the thing is Muse's to say, from the footage itself: the words a person uses
+    # may be ones the search does not know, or fit only some of the things they mean.
+    async def _names(self, bench: Bench, thing: str, moments: Sequence[float]) -> tuple[str, ...]:
+        footage, model = bench.footage, bench.model
+        asked = _digest([footage.content_hash, thing, model.model_version, _NAME_PROMPT_VERSION])
+        answer_key = f"ask/names/{asked}.json"
+        if await self._blobs.exists(answer_key):
+            return names_from((await self._blobs.read(answer_key)).decode(), thing)
+        tiles = [Tile(t, None, str(n)) for n, t in enumerate(moments, 1)]
+        prompt = NAME.format(thing=thing, most=MAX_NAMES)
+        request = CompletionRequest(
+            messages=(
+                SystemMessage(NAMING),
+                UserMessage(prompt, image_keys=(await self._sheet(bench, tiles),)),
+            ),
+            max_output_tokens=2000,
+            response_schema=NAMES_SCHEMA,
+            effort="low",
+        )
+        try:
+            completion = await model.complete(request)
+        except LanguageModelError:
+            logger.warning("%s: no other names for %r", footage.id, thing)
+            return (thing,)
+        bench.charges += completion.charges
+        await self._blobs.write(answer_key, completion.text.encode())
+        return names_from(completion.text, thing)
+
+    # Muse looks once at each item, as the search also finds things that only look the part: a
+    # sign on a wall, a corner of something bigger. It stays unless Muse is sure it is not one.
+    async def _real(
+        self, bench: Bench, names: Sequence[str], tracks: Sequence[Track]
+    ) -> list[Track]:
+        if not tracks:
+            return []
+        if bench.on_step is not None:
+            await bench.on_step(Step(text=f"Checking each {names[0]}", done=False))
+        best = [_largest(track.observations) for track in tracks]
+        prompt = LOOK.format(boxed=CONFIRM, question=CONFIRM_QUESTION.format(" or ".join(names)))
+        answers = await self._ask_tiles(bench, [Tile(o.t, o.box, "") for o in best], prompt)
+        kept = zip(tracks, answers, strict=True)
+        return [track for track, answer in kept if answer.verdict != "no"]
+
+    # One image call per name finds them all, however many; the still cache makes it free again.
+    async def _on_photo(
+        self, bench: Bench, thing: str, names: Sequence[str], moments: Sequence[float]
+    ) -> list[Track]:
         footage = bench.footage
-        looks = await self._stills.look(footage, {thing: {0.0}}, bench.segmenters.image)
+        wanted = {name: set(moments) for name in names}
+        looks = await self._stills.look(footage, wanted, bench.segmenters.image)
         bench.charges += looks.charges
         tracks = [
             Track(footage_id=footage.id, track_id=f"{thing}-{n}", concept=thing, observations=(o,))
             for n, o in enumerate(looks.observations, 1)
         ]
-        return _placed(thing, tracks)
+        return list(distinct_tracks(tracks, 0.0))
 
-    # SAM tracks the thing once over the stretches where something moves; the observation cache
-    # makes asking again free.
-    async def _tracked(self, bench: Bench, thing: str) -> tuple[Item, ...]:
+    # Each name is tried on a few stills, which costs little against a pass over the video, and
+    # SAM tracks the ones worth it over the stretches where something moves. The observation
+    # cache makes asking again free.
+    async def _tracked(
+        self, bench: Bench, thing: str, names: Sequence[str], moments: Sequence[float]
+    ) -> list[Track]:
         footage = bench.footage
-        spans = bench.session.active_spans or (TimeSpan(start=0, end=footage.duration_s),)
+        spans = _spans(bench)
+        video = bench.segmenters.video
+        if bench.on_step is not None and thing not in bench.session.things:
+            frames = sum(_length(span) for span in spans) * self._track_fps
+            wait = _wait_words(frames * SAM_S_PER_FRAME)
+            await bench.on_step(Step(text=f"Tracking every {thing}, {wait}", done=False))
+        if len(names) > 1:
+            wanted = {name: set(moments) for name in names}
+            looks = await self._stills.look(footage, wanted, bench.segmenters.image)
+            bench.charges += looks.charges
+            seen: defaultdict[str, list[Observation]] = defaultdict(list)
+            for observation in looks.observations:
+                seen[observation.concept].append(observation)
+            names = chosen_names(names, seen, video.max_tracked_objects)
         plan = SamplingPlan(
             footage_id=footage.id,
             windows=tuple(
-                SamplingWindow(span=span, fps=self._track_fps, concepts=(thing,)) for span in spans
+                SamplingWindow(span=span, fps=self._track_fps, concepts=tuple(names))
+                for span in spans
             ),
         )
-        result = await self._runner.run(footage, plan, bench.segmenters.video)
+        result = await self._runner.run(footage, plan, video)
         bench.charges += result.charges
         tracks = naive_tracks(footage.id, result.observations, max(1.0, 3 / self._track_fps))
+        # A request can miss something for a whole window and notice it again in the next.
+        distinct = distinct_tracks(tracks, 2 * WINDOW_S)
         # One sighting is too little to tell an item from noise.
-        return _named(thing, [track for track in tracks if len(track.observations) >= 2])
+        return [track for track in distinct if len(track.observations) >= 2]
 
     # One picture of up to nine tiles per call; kept by its inputs, so the same look is free.
-    async def _ask_sheet(self, bench: Bench, tiles: Sequence[Tile], prompt: str) -> dict[str, str]:
-        footage = bench.footage
-        drawn = [(tile.t, tile.box.model_dump() if tile.box else None, tile.label)
-                 for tile in tiles]  # fmt: skip
-        digest = _digest([footage.content_hash, drawn])
-        sheet_key = f"ask/sheets/{digest}.jpg"
+    async def _ask_sheet(
+        self, bench: Bench, tiles: Sequence[Tile], prompt: str
+    ) -> dict[str, _TileAnswer]:
+        digest = _sheet_digest(bench, tiles)
         asked = _digest([digest, prompt, bench.model.model_version, _LOOK_PROMPT_VERSION])
         answer_key = f"ask/looked/{asked}.json"
         if await self._blobs.exists(answer_key):
             return _answers((await self._blobs.read(answer_key)).decode())
-        if not await self._blobs.exists(sheet_key):
-            source = await self._blobs.local_path(footage.original_key)
-            with tempfile.TemporaryDirectory() as workdir:
-                destination = Path(workdir) / "sheet.jpg"
-                await self._sheets.make_sheet(source, destination, tiles)
-                await self._blobs.write_file(sheet_key, destination)
+        sheet_key = await self._sheet(bench, tiles)
         completion = await bench.model.complete(
             CompletionRequest(
                 messages=(SystemMessage(LOOKING), UserMessage(prompt, image_keys=(sheet_key,))),
-                max_output_tokens=2000,
+                max_output_tokens=4000,
                 response_schema=LOOK_SCHEMA,
                 effort="low",
             )
@@ -546,22 +773,96 @@ class Toolset:
         await self._blobs.write(answer_key, completion.text.encode())
         return answers
 
-
-class _TileAnswer(BaseModel):
-    tile: str
-    answer: str
+    async def _sheet(self, bench: Bench, tiles: Sequence[Tile]) -> str:
+        sheet_key = f"ask/sheets/{_sheet_digest(bench, tiles)}.jpg"
+        if not await self._blobs.exists(sheet_key):
+            source = await self._blobs.local_path(bench.footage.original_key)
+            with tempfile.TemporaryDirectory() as workdir:
+                destination = Path(workdir) / "sheet.jpg"
+                await self._sheets.make_sheet(source, destination, tiles)
+                await self._blobs.write_file(sheet_key, destination)
+        return sheet_key
 
 
 class _SheetAnswer(BaseModel):
     tiles: list[_TileAnswer]
 
 
-def _answers(text: str) -> dict[str, str]:
+def _sheet_digest(bench: Bench, tiles: Sequence[Tile]) -> str:
+    drawn = [(tile.t, tile.box.model_dump() if tile.box else None, tile.label) for tile in tiles]
+    return _digest([bench.footage.content_hash, drawn])
+
+
+def _answers(text: str) -> dict[str, _TileAnswer]:
     try:
         parsed = _SheetAnswer.model_validate_json(text)
     except ValidationError as error:
         raise LanguageModelError(f"Muse's look did not fit its schema: {error}") from error
-    return {t.tile.strip(): " ".join(t.answer.split()) for t in parsed.tiles if t.answer.strip()}
+    return {
+        t.tile.strip(): t.model_copy(update={"answer": " ".join(t.answer.split())})
+        for t in parsed.tiles
+        if t.answer.strip()
+    }
+
+
+# The answers look gave to a question; the agent may vary its case and spacing.
+def _answers_to(bench: Bench, question: str) -> dict[str, Judged]:
+    asked = bench.judged.get(_thing(question))
+    if asked is None:
+        known = join_words([f'"{q}"' for q in bench.judged]) or "nothing yet"
+        raise ToolError(f"look has not asked that; it has asked {known}")
+    return asked
+
+
+def _meets(judged: Judged | None, want: str) -> bool | None:
+    if judged is None or judged.verdict not in ("yes", "no"):
+        return None
+    return judged.verdict == want
+
+
+# None is not known: the answers that are known do not settle it.
+def _together(states: Sequence[bool | None], how: str) -> bool | None:
+    settled, opposite = (False, True) if how == "all" else (True, False)
+    if settled in states:
+        return settled
+    return None if None in states else opposite
+
+
+# A wording that holds something already found means that thing: "box on the belt" after "box".
+# Tracking it under the new words would take minutes and find the same items.
+def _known_thing(bench: Bench, text: str) -> str:
+    thing = _thing(text)
+    asked = f" {_stems(thing)} "
+    for known in (*bench.found, *bench.session.things):
+        if f" {_stems(known)} " in asked:
+            return known
+    return thing
+
+
+def _stems(thing: str) -> str:
+    return " ".join(word.rstrip("s") for word in thing.split())
+
+
+def _wait_words(seconds: float) -> str:
+    return "under a minute" if seconds < 60 else f"about {round(seconds / 60)} min"
+
+
+# Another moment that shows the item well, as far as possible from the view already used.
+def _second_view(item: Item) -> Observation | None:
+    best = _size(item.best.box)
+    views = [o for o in item.track.observations if _size(o.box) >= SECOND_VIEW_SIZE * best]
+    view = max(views, key=lambda o: abs(o.t - item.best.t), default=None)
+    return None if view is None or view.t == item.best.t else view
+
+
+def _size(box: Box) -> float:
+    return (box.x1 - box.x0) * (box.y1 - box.y0)
+
+
+# What is written on the box in a proof; a bare yes means nothing without its question.
+def _tag(answer: _TileAnswer, question: str) -> str:
+    bare = answer.answer.lower().rstrip(".") in ("yes", "no", "cannot tell")
+    return question if bare else answer.answer
 
 
 def _watching(arguments: WatchArguments) -> str:
@@ -749,6 +1050,35 @@ def _seen(item: Item) -> TimeSpan:
 
 def _length(span: TimeSpan) -> float:
     return span.end - span.start
+
+
+def _spans(bench: Bench) -> tuple[TimeSpan, ...]:
+    whole = TimeSpan(start=0, end=bench.footage.duration_s)
+    return tuple(bench.session.active_spans) or (whole,)
+
+
+# Moments spread evenly over these stretches, inside them, away from their ends.
+def _moments(spans: Sequence[TimeSpan]) -> tuple[float, ...]:
+    total = sum(_length(span) for span in spans)
+    moments: list[float] = []
+    for n in range(NAME_MOMENTS):
+        left = total * (2 * n + 1) / (2 * NAME_MOMENTS)
+        for span in spans:
+            if left <= _length(span):
+                moments.append(span.start + left)
+                break
+            left -= _length(span)
+    return tuple(moments)
+
+
+# A moment filling most of the video says nothing about when: it is a general impression, so it
+# gives the agent no times to repeat and no proof to show.
+def note_moment(
+    notebook: Notebook, moment: Moment, duration_s: float, clip: TimeSpan | None
+) -> Evidence:
+    if moment.span.end - moment.span.start >= BROAD_SHARE * duration_s:
+        return notebook.add("seen", f"Throughout: {moment.what}")
+    return notebook.add("seen", f"{_span_text(moment.span)}: {moment.what}", clip)
 
 
 def _around(span: TimeSpan, duration_s: float) -> TimeSpan:

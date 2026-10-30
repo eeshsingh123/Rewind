@@ -18,7 +18,8 @@ from rewind.core.ports import (
 
 # Muse's coordinates run 0 to 1000 over the image it was sent.
 _GRID = 1000
-_MAX_OUTPUT_TOKENS = 1000
+# Muse's thinking counts against this; when it uses it all up the reply comes back empty.
+_MAX_OUTPUT_TOKENS = 4000
 _PROMPT_VERSION = "1"
 
 MARK = (

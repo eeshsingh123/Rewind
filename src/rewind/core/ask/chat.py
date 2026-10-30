@@ -29,6 +29,7 @@ from rewind.core.ask.replies import (
     START,
     WORKING,
     answer_text,
+    choice_buttons,
     first_look_text,
     progress_text,
     question_buttons,
@@ -304,9 +305,13 @@ class Chats:
 
     async def _suggested(self, session_id: str, index: int) -> str:
         session = await self._sessions.get(session_id)
-        if session is None or index >= len(session.first_look.questions):
+        if session is None:
             raise _Stopped(NO_FOOTAGE)
-        return session.first_look.questions[index]
+        back = session.exchanges[-1].choices if session.exchanges else ()
+        tappable = (*session.first_look.questions, *back)
+        if index >= len(tappable):
+            raise _Stopped(NO_FOOTAGE)
+        return tappable[index]
 
     # Footage in, first look out. None when it could not be opened and the person has been told;
     # the chat's latest footage then stays as it was.
@@ -406,7 +411,9 @@ class Chats:
         link = timeline_link(self._settings.public_base_url, session_id)
         text = answer_text(exchange, link, left_out, turn.capabilities)
         if proof is None:
-            await _finish(turn, progress.key, text)
+            session = await self._sessions.get(session_id)
+            back = choice_buttons(session, exchange, turn.capabilities) if session else ()
+            await _finish(turn, progress.key, text, back)
             return
         await progress.settle()
         await activity.show("upload_video")

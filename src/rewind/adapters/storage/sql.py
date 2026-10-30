@@ -65,7 +65,10 @@ class SqlRepository:
 
     @classmethod
     def from_url(cls, url: str) -> "SqlRepository":
-        return cls(create_async_engine(url))
+        # A paid result is lost if its cost cannot be written, so a write waits out another process
+        # using the same SQLite file instead of giving up after SQLite's default 5 s.
+        waits = {"timeout": 30} if url.startswith("sqlite") else {}
+        return cls(create_async_engine(url, connect_args=waits))
 
     async def create_tables(self) -> None:
         async with self._engine.begin() as connection:

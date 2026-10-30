@@ -9,6 +9,9 @@ import httpx
 
 from rewind.contracts import Box, Charge, Observation, TimeSpan
 from rewind.core.ask import Mark, Tile
+from rewind.core.ask.names import NAMES_SCHEMA
+from rewind.core.ask.reading import READ_SCHEMA
+from rewind.core.ask.tools import CONFIRM, PLACE
 from rewind.core.perception import ActivitySample
 from rewind.core.ports import (
     Completion,
@@ -48,13 +51,39 @@ def completion(text: str = "", *calls: ToolCall, output_tokens: int = 50) -> Com
     return Completion(text=text, tool_calls=calls, charges=(spent,))
 
 
+PLAIN_READING = {
+    "thing": "", "conditions": [], "combine": "none", "part": "", "plain": "", "unclear": "",
+    "choices": [],
+}  # fmt: skip
+
+
+# Readings are scripted apart from the replies, since every question gets one.
 @dataclass
 class ScriptedModel:
     replies: list[Completion]
     requests: list[CompletionRequest] = field(default_factory=list[CompletionRequest])
     model_version: str = "muse-test"
+    readings: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
+
+    # What Muse suggests calling a thing, which tiles it says are not that thing, and which are
+    # not in the place asked about.
+    names: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
+    not_real: list[str] = field(default_factory=list[str])
+    not_there: list[str] = field(default_factory=list[str])
 
     async def complete(self, request: CompletionRequest) -> Completion:
+        if request.response_schema is READ_SCHEMA:
+            return completion(json.dumps(self.readings.pop(0) if self.readings else PLAIN_READING))
+        last = request.messages[-1]
+        if request.response_schema is NAMES_SCHEMA:
+            asked = next((n for t, n in self.names.items() if t in getattr(last, "text", "")), [])
+            return completion(json.dumps({"names": asked}))
+        if CONFIRM in getattr(last, "text", ""):
+            no = [{"tile": t, "verdict": "no", "answer": "not one"} for t in self.not_real]
+            return completion(json.dumps({"tiles": no}))
+        if PLACE in getattr(last, "text", ""):
+            no = [{"tile": t, "verdict": "no", "answer": "beside it"} for t in self.not_there]
+            return completion(json.dumps({"tiles": no}))
         self.requests.append(request)
         return self.replies.pop(0) if self.replies else completion("ok")
 

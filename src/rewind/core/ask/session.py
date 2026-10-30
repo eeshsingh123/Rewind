@@ -78,6 +78,8 @@ class Finding(_Frozen):
     proof_key: str | None
     # Where it happened, for a timeline; None on a photo or when no one moment backs it.
     span: TimeSpan | None = None
+    # The proof shows only the start of the stretch.
+    clip_cut: bool = False
 
 
 class Exchange(_Frozen):
@@ -89,6 +91,12 @@ class Exchange(_Frozen):
     steps: tuple[str, ...] = ()
     cost_usd: Decimal = Decimal(0)
     marked: Marked | None = None
+    # How the question was read, in the person's words; shown with the answer.
+    reading: str = ""
+    # The answer was a question back: the answers on offer.
+    choices: tuple[str, ...] = ()
+    # Says when claims were cut because they could not be backed.
+    left_out: str = ""
 
 
 # One photo or video and everything asked about it. There are no lines and no rules to set up.
@@ -103,6 +111,8 @@ class Session(_Frozen):
     photo: bool = False
     # What a browser can play: a photo's JPEG, or a video made playable whatever it was shot in.
     playback_key: str = ""
+    # What has been found so far; finding one of these again costs nothing.
+    things: tuple[str, ...] = ()
 
 
 class Sessions:

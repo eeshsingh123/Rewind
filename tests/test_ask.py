@@ -20,8 +20,11 @@ from rewind.core.ask import (
     Toolset,
     Watcher,
 )
-from rewind.core.ask.evidence import untraceable
+from rewind.core.ask.evidence import Claim, Notebook, untraceable
+from rewind.core.ask.reading import Reader
 from rewind.core.ask.stops import find_stops
+from rewind.core.ask.tools import note_moment
+from rewind.core.ask.watch import Moment
 from rewind.core.perception import Ingest, PartLooker, PerceptionRunner, ProxyMaker
 from rewind.core.ports import Segmentation, SegmentRequest, ToolCall, ToolResultMessage, UserMessage
 from tests.fakes import (
@@ -104,7 +107,8 @@ class Flow:
         runner = PerceptionRunner(proxies, store)
         tools = Toolset(blobs, watcher, runner, stills, self.sheets, track_fps=2.0).tools()
         proofs = Proofs(blobs, self.media, self.media)
-        self.agent = AskAgent(self.sessions, tools, proofs, AskLimits())
+        reader = Reader(blobs, stills)
+        self.agent = AskAgent(self.sessions, tools, proofs, reader, AskLimits())
         self.segmenters = Segmenters(video=self.sam, image=self.sam)
 
     async def on_step(self, step: Step) -> None:
@@ -122,8 +126,9 @@ async def test_a_question_is_answered_from_tool_evidence_with_proof(tmp_path: Pa
         completion(json.dumps(FIRST_LOOK)),
         completion("", _call("find", {"thing": "Carton"})),
         completion("", _call("look", {"question": "Does it have a label?", "thing": "carton"})),
-        completion(json.dumps({"tiles": [{"tile": "1", "answer": "no label"},
-                                         {"tile": "2", "answer": "has a label"}]})),
+        completion(json.dumps({"tiles": [{"tile": "1", "verdict": "no", "answer": "no label"},
+                                         {"tile": "2", "verdict": "yes",
+                                          "answer": "has a label"}]})),
         completion("", _call("answer", {"claims": [
             {"text": UNLABELLED, "evidence": ["e4"]},
             {"text": "3 cartons went out today.", "evidence": ["e3"]},
@@ -142,9 +147,9 @@ async def test_a_question_is_answered_from_tool_evidence_with_proof(tmp_path: Pa
     assert [s.text for s in steps if s.done] == [
         "Watched the whole video", "Found 2 cartons", "Looked closer at 2 cartons"
     ]  # fmt: skip
-    # The look reused the cartons find tracked: SAM was paid once.
-    assert sam.calls == 1
-    assert [tile.box is not None for tile in sheets.tiles[0]] == [True, True]
+    # The look reused the cartons find tracked: SAM was paid once, for each window of the clip.
+    assert sam.calls == 2
+    assert [tile.box is not None for tile in sheets.tiles[-1]] == [True, True]
     # "3" is in no evidence, so that claim went back to Muse, and was left out.
     sent_back = model.requests[-1].messages[-1]
     assert isinstance(sent_back, ToolResultMessage)
@@ -164,6 +169,51 @@ async def test_a_question_is_answered_from_tool_evidence_with_proof(tmp_path: Pa
     assert len(model.requests) == asked
 
 
+# SAM does not know "parcel"; "box" finds a carton, a shelf that drops out for a while and a sign
+# on the wall; "wrapped package" finds the carton again and a soft parcel "box" cannot see.
+class FakeBelt(FakeSam):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tracked: list[str] = []
+
+    async def segment(self, request: SegmentRequest) -> Segmentation:
+        self.calls += 1
+        concept = getattr(request.prompt, "text", "")
+        if len(request.frame_times) > 1:
+            self.tracked.append(concept)
+        found: list[Observation] = []
+        for t in request.frame_times:
+            carton = max(0.0, 0.6 - 0.1 * t)
+            if concept == "box":
+                found += [seen(request, concept, t, 1, carton, 0.3),
+                          seen(request, concept, t, 2, 0.0, 0.0, size=0.05)]  # fmt: skip
+                found += [seen(request, concept, t, 3 if t < 2 else 4, 0.8, 0.0, size=0.1)]
+                found = [o for o in found if not (o.object_id in (3, 4) and 1 < o.t < 3)]
+            if concept == "wrapped package":
+                found += [seen(request, concept, t, 1, carton, 0.3),
+                          seen(request, concept, t, 2, carton, 0.65)]  # fmt: skip
+        return Segmentation(tuple(found), (billed_frames(len(request.frame_times)),))
+
+
+# Muse says what to search for from the footage, code tracks only the names that add something,
+# and each item ends up counted once: under two names, or noticed twice in one place.
+async def test_every_look_of_a_thing_is_found_and_counted_once(tmp_path: Path) -> None:
+    sam = FakeBelt()
+    flow = Flow(tmp_path, sam)
+    await flow.blobs.write("uploads/belt.mp4", b"video")
+    model = ScriptedModel(
+        [completion(json.dumps(FIRST_LOOK)), completion("", _call("find", {"thing": "parcel"}))],
+        names={"parcel": ["box", "wrapped package", "bag"]},
+        not_real=["2"],
+    )
+
+    session, _ = await flow.sessions.open("s1", "uploads/belt.mp4", model, flow.on_step)
+    await flow.agent.ask(session, "How many parcels?", model, flow.segmenters, flow.on_step)
+
+    assert set(sam.tracked) == {"box", "wrapped package"}
+    assert "Found 3 parcels" in [s.text for s in flow.steps if s.done]
+
+
 # A photo goes through the same doors: Muse looks once, SAM finds items by image, Muse judges
 # each one, and the proof is the photo with the box drawn.
 async def test_a_photo_is_asked_about_like_a_video(tmp_path: Path) -> None:
@@ -175,9 +225,10 @@ async def test_a_photo_is_asked_about_like_a_video(tmp_path: Path) -> None:
         completion(json.dumps(PHOTO_LOOK)),
         completion("", _call("find", {"thing": "box"})),
         completion("", _call("look", {"question": "Is there a label on top?", "thing": "box"})),
-        completion(json.dumps({"tiles": [{"tile": "1", "answer": "has a label"},
-                                         {"tile": "2", "answer": "no label"},
-                                         {"tile": "3", "answer": "has a label"}]})),
+        completion(json.dumps({"tiles": [{"tile": "1", "verdict": "yes", "answer": "has"},
+                                         {"tile": "2", "verdict": "no", "answer": "no label"},
+                                         {"tile": "3", "verdict": "yes",
+                                          "answer": "has a label"}]})),
         completion("", _call("measure", {"thing": "box"})),
         completion("", _call("answer", {"claims": [{"text": no_label, "evidence": ["e5"]}]})),
     ])  # fmt: skip
@@ -194,7 +245,7 @@ async def test_a_photo_is_asked_about_like_a_video(tmp_path: Path) -> None:
     assert session.first_look.moments[0].what == "The box on the right looks open."
     agent_turn = model.requests[1]
     assert [tool.name for tool in agent_turn.tools] == [
-        "find", "look", "measure", "area", "answer"
+        "find", "look", "combine", "measure", "area", "answer"
     ]  # fmt: skip
     assert [s.text for s in flow.steps if s.done] == [
         "Looked at the photo", "Found 3 boxes", "Looked closer at 3 boxes",
@@ -205,7 +256,7 @@ async def test_a_photo_is_asked_about_like_a_video(tmp_path: Path) -> None:
     found = model.requests[2].messages[-1]
     assert isinstance(found, ToolResultMessage)
     assert "the 2nd box from the left and the 3rd box from the left" in found.text
-    assert [tile.t for tile in flow.sheets.tiles[0]] == [0.0, 0.0, 0.0]
+    assert [tile.t for tile in flow.sheets.tiles[-1]] == [0.0, 0.0, 0.0]
     [finding] = answer.findings
     assert finding.kind == "seen"
     assert finding.proof_key is not None
@@ -264,9 +315,36 @@ async def test_a_question_about_one_area_counts_only_inside_it(tmp_path: Path) -
         session, "Is the back wall clean?", model, flow.segmenters, flow.on_step
     )
     [finding] = answer.findings
-    assert (finding.text, finding.kind, finding.proof_key) == (unseen, "seen", None)
+    assert (finding.text, finding.kind) == (unseen, "seen")
+    assert finding.proof_key is not None
     assert len(flow.media.drawn) == drawn
     assert "Could not make out the back wall" in [s.text for s in flow.steps if s.done][-1]
+
+
+# A rectangle cannot follow a belt: both cartons fall inside it, and Muse rules out the one that
+# only stands behind the belt, so the count and everything after it leave that one out.
+async def test_an_item_inside_the_rectangle_but_not_in_the_place_is_not_counted(
+    tmp_path: Path,
+) -> None:
+    flow = Flow(tmp_path, FakeSam())
+    await flow.blobs.write("uploads/belt.mp4", b"video")
+    belt = {"object_name": "the belt", "holds": "carton",
+            "bbox": {"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}}  # fmt: skip
+    model = ScriptedModel(
+        [
+            completion(json.dumps(FIRST_LOOK)),
+            completion("", _call("area", {"name": "the belt", "at_s": 1.0})),
+            completion(json.dumps({"areas": [belt]})),
+            completion("", _call("measure", {"thing": "carton", "area": "the belt"})),
+        ],
+        not_there=["2"],
+    )
+
+    session, _ = await flow.sessions.open("s1", "uploads/belt.mp4", model, flow.on_step)
+    question = "How many cartons are on the belt?"
+    await flow.agent.ask(session, question, model, flow.segmenters, flow.on_step)
+
+    assert "Measured 1 carton: 0 stops" in [s.text for s in flow.steps if s.done]
 
 
 def _gap_in_output() -> list[float]:
@@ -315,3 +393,19 @@ def test_a_claim_with_a_number_its_evidence_does_not_state_is_caught() -> None:
     assert untraceable("The line stopped for 15 s and lost 7 jars at 00:21.", sources) == (
         "7", "00:21"
     )  # fmt: skip
+
+
+# "Boxes have a label" over the whole video hid the three that had none: an impression of the
+# whole video can neither give a claim its times nor be its proof. A single moment can.
+def test_a_general_impression_cannot_back_a_claim() -> None:
+    notebook = Notebook()
+    whole = TimeSpan(start=0, end=60)
+    broad = Moment(span=whole, what="Boxes have a white label.")
+    single = Moment(span=TimeSpan(start=34, end=36), what="A box passes with no label.")
+    impression = note_moment(notebook, broad, 60.0, whole)
+    moment = note_moment(notebook, single, 60.0, single.span)
+
+    assert impression.clip is None
+    assert isinstance(notebook.check("Boxes have a label from 00:00 to 01:00.", ["e1"]), str)
+    assert isinstance(notebook.check("Every box has a white label.", ["e1"]), str)
+    assert isinstance(notebook.check("The box at 00:34 has no label.", [moment.id]), Claim)

@@ -180,8 +180,44 @@ async def test_a_request_that_runs_out_of_slots_is_continued_with_the_same_ids(
     }
     assert ids_by_object == {0: {0}, 1: {1}, 2: {2}, 3: {3}, 4: {4}}
     starts = [r.frame_times[0] for r in segmenter.requests if r.prompt.text == "glass jar"]  # type: ignore[union-attr]
-    assert starts == [0.0, 2.0, 4.5, 6.0]
+    assert sorted(starts) == [0.0, 2.0, 4.5, 5.0, 6.0]
     assert max(o.t for o in jars if o.box.x0 == 0.8) == 10.0
+
+
+# Like SAM video on a long clip: it notices only what is in view as a request starts.
+class StartOnlySegmenter(FakeSegmenter):
+    arrives = (0.0, 7.0)
+
+    async def segment(self, request: SegmentRequest) -> Segmentation:
+        self.requests.append(request)
+        first = request.frame_times[0]
+        found = [
+            Observation(
+                footage_id=request.footage_id, t=t, concept="box",
+                box=Box(x0=index / 5, y0=0.4, x1=index / 5 + 0.1, y1=0.6),
+                score=0.9, object_id=index,
+            )
+            for t in request.frame_times
+            for index, arrives in enumerate(self.arrives)
+            if arrives <= first + 3 and t >= arrives
+        ]  # fmt: skip
+        return Segmentation(observations=tuple(found), charges=self.estimate(request))
+
+
+async def test_what_arrives_during_a_long_clip_is_found(blobs: LocalDiskBlobStore) -> None:
+    video = FakeVideo()
+    proxies = ProxyMaker(blobs, video, max_height=720)
+    runner = PerceptionRunner(proxies, ParquetObservationStore(blobs))
+    await blobs.write("footage/line.mp4", b"original")
+    ingested = await Ingest(blobs, video, FakeActivity(), proxies, 2.0).ingest(
+        "f1", "line1", "footage/line.mp4"
+    )
+    plan = _plan("f1", (TimeSpan(start=0, end=10),), "box")
+
+    result = await runner.run(ingested.footage, plan, StartOnlySegmenter())
+
+    assert {o.object_id for o in result.observations if o.box.x0 == 0.2} == {1}
+    assert {o.object_id for o in result.observations if o.box.x0 == 0.0} == {0}
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")

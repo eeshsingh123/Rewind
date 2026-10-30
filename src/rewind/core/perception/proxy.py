@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import json
 import tempfile
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,7 @@ class ProxyMaker:
         self._blobs = blobs
         self._video = video
         self._max_height = max_height
+        self._making: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     # The clip of these spans at this fps, made once per footage content and then reused.
     async def ensure(
@@ -30,12 +33,14 @@ class ProxyMaker:
     ) -> ProxyClip:
         stem = f"proxies/{content_hash}/{fps:g}fps-{_spans_digest(spans)}"
         proxy = Proxy(blob_key=f"{stem}.mp4", fps=fps, time_map_key=f"{stem}.times.json")
-        if await self._blobs.exists(proxy.blob_key) and await self._blobs.exists(
-            proxy.time_map_key
-        ):
-            frame_times = tuple(json.loads(await self._blobs.read(proxy.time_map_key)))
-        else:
-            frame_times = await self._make(source_key, proxy, spans)
+        # Two concepts tracked side by side ask for the same clips at the same moment.
+        async with self._making[stem]:
+            if await self._blobs.exists(proxy.blob_key) and await self._blobs.exists(
+                proxy.time_map_key
+            ):
+                frame_times = tuple(json.loads(await self._blobs.read(proxy.time_map_key)))
+            else:
+                frame_times = await self._make(source_key, proxy, spans)
         info = await self._video.probe(await self._blobs.local_path(proxy.blob_key))
         return ProxyClip(proxy=proxy, width=info.width, height=info.height, frame_times=frame_times)
 

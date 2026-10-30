@@ -4,6 +4,7 @@ from rewind.core.ask.chat import TURN_JOB, Activity, Chats, ChatSettings, Inbox
 from rewind.core.ask.evidence import Claim, Evidence, Kind, Notebook
 from rewind.core.ask.marks import ClipMaker, Mark, ProofMarks, Sighting
 from rewind.core.ask.proofs import Proofs
+from rewind.core.ask.reading import Reader, Reading
 from rewind.core.ask.replies import MENU
 from rewind.core.ask.runs import SPENT, WEB_WORKSPACE, Hands, Live, Runs
 from rewind.core.ask.samples import Sample, Samples
@@ -54,6 +55,8 @@ __all__ = [
     "PhotoReader",
     "ProofMarks",
     "Proofs",
+    "Reader",
+    "Reading",
     "Runs",
     "Sample",
     "Samples",

@@ -30,6 +30,7 @@ FETCHING = "Getting your file"
 WORKING = "On it"
 _PROOF_TOO_BIG = "The proof is too big to send here."
 _PROOF_ON_TIMELINE = "The proof is too big to send here, so it's on the timeline."
+CLIP_CUT = "The clip shows the first 20 s of a longer stretch."
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 _QUESTION_SHOWN_CHARS = 200
 _TAP = re.compile(r"q:([\w-]+):(\d+)")
@@ -70,6 +71,17 @@ def question_buttons(session: Session, capabilities: ChannelCapabilities) -> tup
     )
 
 
+# A question back is answered by a tap too; its answers follow the suggested questions.
+def choice_buttons(
+    session: Session, exchange: Exchange, capabilities: ChannelCapabilities
+) -> tuple[Button, ...]:
+    first = len(session.first_look.questions)
+    return tuple(
+        Button(label=choice, value=f"q:{session.id}:{first + index}")
+        for index, choice in enumerate(exchange.choices[: capabilities.max_buttons])
+    )
+
+
 def tapped(text: str) -> tuple[str, int] | None:
     match = _TAP.fullmatch(text)
     return None if match is None else (match.group(1), int(match.group(2)))
@@ -90,12 +102,17 @@ def answer_text(
     proof_left_out: bool,
     capabilities: ChannelCapabilities,
 ) -> str:
+    head = [exchange.reading, ""] if exchange.reading else []
     tail = ["", _cost_line(exchange.cost_usd)]
+    if exchange.left_out:
+        tail.insert(1, exchange.left_out)
+    if any(finding.clip_cut for finding in exchange.findings):
+        tail.append(CLIP_CUT)
     if proof_left_out:
         tail.append(_PROOF_ON_TIMELINE if timeline else _PROOF_TOO_BIG)
     if timeline:
         tail.append(f"Open the full timeline: {timeline}")
-    return _fit([], exchange.answer.splitlines(), tail, capabilities)
+    return _fit(head, exchange.answer.splitlines(), tail, capabilities)
 
 
 def _is_local(base_url: str) -> bool:

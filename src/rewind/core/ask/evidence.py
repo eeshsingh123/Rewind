@@ -1,6 +1,6 @@
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from rewind.contracts import TimeSpan
@@ -10,7 +10,7 @@ from rewind.core.ask.marks import Mark
 type Kind = Literal["measured", "seen"]
 
 MIN_WORDS = 3
-MAX_CLAIM_CHARS = 300
+MAX_CLAIM_CHARS = 500
 _EVIDENCE_ID = re.compile(r"\be\d+\b")
 _NUMBER = re.compile(r"\d+(?:[:.]\d+)*")
 _WORDS = {
@@ -30,6 +30,12 @@ class Evidence:
     # means the photo itself.
     clip: TimeSpan | None = None
     marks: tuple[Mark, ...] = ()
+    # A proof already made, for evidence no single stretch can show.
+    proof_key: str | None = None
+
+    @property
+    def shows(self) -> bool:
+        return self.clip is not None or self.proof_key is not None
 
     @property
     def line(self) -> str:
@@ -43,10 +49,18 @@ class Claim:
     kind: Kind
     evidence: tuple[Evidence, ...]
 
-    # The first cited evidence with a clip: what the claim's proof shows.
+    # The first cited evidence that can be shown, with every other cited item in its stretch
+    # boxed too: a claim about two boxes shows two.
     @property
     def shown(self) -> Evidence | None:
-        return next((e for e in self.evidence if e.clip is not None), None)
+        first = next((e for e in self.evidence if e.shows), None)
+        if first is None or first.clip is None:
+            return first
+        marks = list(first.marks)
+        for other in self.evidence:
+            if other.clip is not None and _overlap(other.clip, first.clip):
+                marks += [mark for mark in other.marks if mark not in marks]
+        return replace(first, marks=tuple(marks))
 
 
 # Every tool result is written down here with an id, so an answer can only cite what was found.
@@ -60,10 +74,17 @@ class Notebook:
         text: str,
         clip: TimeSpan | None = None,
         marks: Sequence[Mark] = (),
+        proof_key: str | None = None,
     ) -> Evidence:
-        evidence = Evidence(f"e{len(self._entries) + 1}", kind, text, clip, tuple(marks))
+        number = len(self._entries) + 1
+        evidence = Evidence(f"e{number}", kind, text, clip, tuple(marks), proof_key)
         self._entries[evidence.id] = evidence
         return evidence
+
+    # What code worked out itself: it stands as the answer when the agent's own words do not.
+    def worked_out(self) -> tuple[Claim, ...]:
+        kept = [e for e in self._entries.values() if e.proof_key is not None]
+        return tuple(Claim(e.text, e.kind, (e,)) for e in kept)
 
     # A claim is kept only when it cites known evidence and states no number or time beyond it.
     def check(self, text: str, cited: Sequence[str]) -> Claim | str:
@@ -78,13 +99,16 @@ class Notebook:
         backing = tuple(self._entries[i] for i in dict.fromkeys(cited) if i in self._entries)
         if unknown or not backing:
             return f"Cite evidence ids from the list (unknown: {', '.join(unknown) or 'none'})."
-        missing = untraceable(text, [e.text for e in backing])
+        # The number of things cited is a count code can vouch for.
+        missing = untraceable(text, [*(e.text for e in backing), str(len(backing))])
         if missing:
             return (
                 f"These numbers or times are not in the evidence cited: {', '.join(missing)}. "
                 "Use them only as written there."
             )
         kind: Kind = "measured" if all(e.kind == "measured" for e in backing) else "seen"
+        if kind == "seen" and not any(e.shows for e in backing):
+            return "Nothing cited can be shown. Look at the items or frames, then cite those."
         return Claim(text, kind, backing)
 
 
@@ -94,6 +118,10 @@ def untraceable(text: str, sources: Sequence[str]) -> tuple[str, ...]:
     spoken = _WORD.sub(lambda m: _WORDS[m.group(1).lower()], text)
     stated = [n for n in _NUMBER.findall(spoken) if _canonical(n) not in {"0", "1"}]
     return tuple(dict.fromkeys(n for n in stated if _canonical(n) not in known))
+
+
+def _overlap(one: TimeSpan, other: TimeSpan) -> bool:
+    return one.start <= other.end and other.start <= one.end
 
 
 def _canonical(number: str) -> str:

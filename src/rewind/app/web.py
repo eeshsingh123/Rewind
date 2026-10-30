@@ -67,6 +67,7 @@ class FindingView(_View):
     proof_photo: bool
     start_s: float | None
     end_s: float | None
+    clip_cut: bool
 
 
 class ExchangeView(_View):
@@ -76,6 +77,9 @@ class ExchangeView(_View):
     steps: tuple[str, ...]
     cost_usd: Decimal
     marked_at_s: float | None
+    reading: str
+    choices: tuple[str, ...]
+    left_out: str
 
 
 class SessionView(_View):
@@ -135,6 +139,7 @@ def web_router(
                     proof_photo=bool(key) and PurePosixPath(key or "").suffix == ".jpg",
                     start_s=span.start if span else None,
                     end_s=span.end if span else None,
+                    clip_cut=finding.clip_cut,
                 )
             )
         return ExchangeView(
@@ -144,6 +149,9 @@ def web_router(
             steps=exchange.steps,
             cost_usd=exchange.cost_usd,
             marked_at_s=exchange.marked.t if exchange.marked else None,
+            reading=exchange.reading,
+            choices=exchange.choices,
+            left_out=exchange.left_out,
         )
 
     def session_view(session: Session) -> SessionView:
