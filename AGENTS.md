@@ -1,6 +1,6 @@
 # Rewind
 
-A camera checker for production and packing lines that you talk to through chat. The user sends footage and writes rules in plain English. SAM 3.1 finds and tracks the items and their parts. Muse Spark turns each sentence into a strict rule. A deterministic engine reports every item that broke a rule, with a proof clip. Rules also run over footage already processed. Meta AI Developer Hackathon, Indie track; due Nov 4, 9:00 PM ET.
+Ask your footage anything, from the web, Telegram or WhatsApp. The user uploads a video and asks in plain words, with no setup. Muse Spark watches it, plans the steps and calls tools: SAM 3.1 to track things, crops to look closer, and plain code to count, time and draw the proof. Each step shows live, and every claim comes with a clip. Meta AI Developer Hackathon, Indie track; due Nov 4, 9:00 PM ET.
 
 ## Read first
 
@@ -14,10 +14,12 @@ Keep these short and plain. No codes or ids for tasks; name things by what they 
 ## Product principles
 
 - Every finding is provable: a violation always links to a clip, and an insight always links to the events behind it.
-- Cost follows the rules, not the length of the footage. A paid call happens only when the plan asks for it, and never twice for the same input.
-- AI translates and perceives; plain code decides.
-- Every chat app (Telegram, WhatsApp, web, MCP) reaches the same agent and gets the same answers.
-- Works for any line: a new line is a new sentence and new footage, never new code. Never tune logic or thresholds to one clip; check a fix on another kind of footage.
+- No setup: upload and ask. No lines or rules to create first.
+- Use Muse fully: it watches, plans and reasons. SAM and code make per-item counts and times exact, and code checks every claim against tool results.
+- A paid call never happens twice for the same input. SAM only when a question needs it. Always `muse-spark-1.3-contributor`.
+- Every channel (web, Telegram, WhatsApp) reaches the same agent, shows the same live steps and gets the same answers.
+- Works for any footage: never new code for a new scene. Never tune logic or thresholds to one clip; check a fix on another kind of footage.
+- UI is clean and minimal, in warm, calm neutral colours.
 - Plain words first. Replies are read by a line manager, not an engineer: times instead of ids ("the box at 00:14"), one line per rule, boxes drawn on the proof, as few messages as possible.
 
 ## How we work
