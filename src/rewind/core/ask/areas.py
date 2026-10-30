@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from rewind.contracts import Box, Charge, Footage
-from rewind.core.analysis import Mark, PartLooker, Sighting
-from rewind.core.perception import frame_index
+from rewind.core.ask.marks import Mark, Sighting
+from rewind.core.perception import PartLooker, frame_index
 from rewind.core.ports import (
     BlobStore,
     CompletionRequest,

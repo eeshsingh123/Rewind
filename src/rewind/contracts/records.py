@@ -1,18 +1,8 @@
 from typing import Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import Field
 
 from rewind.contracts.base import Contract, Id
-from rewind.contracts.geometry import Zone
-from rewind.contracts.rules import RuleSpec
-
-
-class Line(Contract):
-    id: Id
-    workspace_id: Id
-    name: str = Field(min_length=1)
-    zones: tuple[Zone, ...] = ()
-    created_at: AwareDatetime
 
 
 class Proxy(Contract):
@@ -33,14 +23,3 @@ class Footage(Contract):
     height: int = Field(gt=0)
     proxy: Proxy | None = None
     status: Literal["uploaded", "processing", "ready", "failed"]
-
-
-class Rule(Contract):
-    id: Id
-    line_id: Id
-    text: str = Field(min_length=1)
-    # The compile-cache key: the same normalized text never compiles twice.
-    normalized_text: str = Field(min_length=1)
-    spec: RuleSpec
-    active: bool = True
-    created_at: AwareDatetime

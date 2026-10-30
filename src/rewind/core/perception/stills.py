@@ -1,20 +1,12 @@
 import tempfile
-from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from rewind.contracts import Charge, Footage, InZone, Observation, RuleSpec
-from rewind.core.perception import (
-    CachedFrames,
-    CacheKey,
-    ObservationStore,
-    OnProgress,
-    frame_index,
-)
+from rewind.contracts import Charge, Footage, Observation
+from rewind.core.perception.cache import CachedFrames, CacheKey, ObservationStore, frame_index
 from rewind.core.ports import BlobStore, ConceptPrompt, Segmenter, SegmentRequest
-from rewind.core.rules import Check
 
 
 # Where the still of one frame is kept. A photo is stored here too, as its own first frame.
@@ -34,36 +26,6 @@ class PartLooks:
     charges: tuple[Charge, ...]
 
 
-# Parts a rule needs only at its checkpoint are looked for on one still per item, not tracked:
-# a video request follows at most 16 objects, and a busy line has more labels than that in one
-# frame. Parts needed over time (ever_before, order) are still tracked on video.
-def checkpoint_parts(spec: RuleSpec) -> frozenset[str]:
-    over_time = {key for step in spec.order for key in (step.first, step.then)}
-    at_checkpoint: set[str] = set()
-    for requirement in spec.requirements:
-        if isinstance(requirement.predicate, InZone):
-            continue
-        if requirement.timing == "ever_before":
-            over_time.add(requirement.predicate.part)
-        else:
-            at_checkpoint.add(requirement.predicate.part)
-    return frozenset(spec.parts[key] for key in at_checkpoint - over_time)
-
-
-# What video has to follow for a rule: the item, and the parts not left to stills.
-def tracking_spec(spec: RuleSpec) -> RuleSpec:
-    stills = checkpoint_parts(spec)
-    tracked = {key: phrase for key, phrase in spec.parts.items() if phrase not in stills}
-    return RuleSpec(entity=spec.entity, parts=tracked, checkpoint=spec.checkpoint)
-
-
-def still_times(spec: RuleSpec, checks: Iterable[Check]) -> dict[str, set[float]]:
-    times: defaultdict[str, set[float]] = defaultdict(set)
-    for phrase in checkpoint_parts(spec):
-        times[phrase].update(check.look_at for check in checks)
-    return times
-
-
 class PartLooker:
     def __init__(self, blobs: BlobStore, store: ObservationStore, stills: StillGrabber) -> None:
         self._blobs = blobs
@@ -72,16 +34,10 @@ class PartLooker:
 
     # One image call per concept and moment, cached like video frames, so a rerun is free.
     async def look(
-        self,
-        footage: Footage,
-        times: Mapping[str, set[float]],
-        segmenter: Segmenter,
-        on_progress: OnProgress | None = None,
+        self, footage: Footage, times: Mapping[str, set[float]], segmenter: Segmenter
     ) -> PartLooks:
         observations: list[Observation] = []
         charges: list[Charge] = []
-        total = sum(len(wanted) for wanted in times.values())
-        done = 0
         for concept, wanted in sorted(times.items()):
             # Kept apart from video frames of the same concept: a still is not a tracked frame.
             key = CacheKey(footage.content_hash, concept, f"{segmenter.model_version}/still")
@@ -93,9 +49,6 @@ class PartLooker:
                     frames[index] = found
                     charges.extend(paid)
                 observations.extend(frames[index])
-                done += 1
-                if on_progress is not None:
-                    await on_progress(done, total)
             await self._store.save(key, CachedFrames(frames=frames))
         return PartLooks(tuple(observations), tuple(charges))
 

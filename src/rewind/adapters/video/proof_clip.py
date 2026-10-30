@@ -8,11 +8,10 @@ import cv2
 import numpy as np
 
 from rewind.contracts import Box, TimeSpan
-from rewind.core.analysis import Mark, Sighting
-from rewind.core.analysis.proof import PART_SHOWN_S
+from rewind.core.ask import Mark, Sighting
 from rewind.core.ports import VideoToolsError
 
-# Colours are BGR. Red for what broke the rule, green for what passed or was found.
+# Colours are BGR. Red for what the proof is about, green for what else was found.
 _RED = (40, 40, 225)
 _GREEN = (70, 190, 60)
 _AMBER = (30, 170, 240)
@@ -114,10 +113,6 @@ def _draw_marks(frame: np.ndarray, t: float, marks: tuple[Mark, ...]) -> None:
         cv2.rectangle(
             frame, (x0, y0), (x1, y1), colour, max(2, round((5 if flagged else 2) * scale))
         )
-        part = _part_at(mark.parts, t)
-        if part is not None:
-            px0, py0, px1, py1 = _pixels(_inside(part, box), width, height)
-            cv2.rectangle(frame, (px0, py0), (px1, py1), _GREEN, max(2, round(2 * scale)))
         if mark.tag:
             _label(frame, mark.tag, (x0, y0), colour, scale)
 
@@ -137,25 +132,11 @@ def _box_at(path: Sequence[Sighting], t: float) -> Box | None:
     return nearest.box
 
 
-def _part_at(parts: Sequence[Sighting], t: float) -> Box | None:
-    near = [p for p in parts if abs(p.t - t) <= PART_SHOWN_S]
-    return min(near, key=lambda p: abs(p.t - t)).box if near else None
-
-
 def _lerp(a: Box, b: Box, share: float) -> Box:
     def mix(p: float, q: float) -> float:
         return p + (q - p) * share
 
     return Box(x0=mix(a.x0, b.x0), y0=mix(a.y0, b.y0), x1=mix(a.x1, b.x1), y1=mix(a.y1, b.y1))
-
-
-# A part's box is kept relative to its item's box, so it moves with the item between sightings.
-def _inside(part: Box, whole: Box) -> Box:
-    width, height = whole.x1 - whole.x0, whole.y1 - whole.y0
-    return Box(
-        x0=whole.x0 + part.x0 * width, y0=whole.y0 + part.y0 * height,
-        x1=whole.x0 + part.x1 * width, y1=whole.y0 + part.y1 * height,
-    )  # fmt: skip
 
 
 def _pixels(box: Box, width: int, height: int) -> tuple[int, int, int, int]:

@@ -4,8 +4,8 @@ from decimal import Decimal
 from urllib.parse import urlsplit
 
 from rewind.contracts import Button, ChannelCapabilities, TimeSpan
-from rewind.core.analysis import clock_time
 from rewind.core.ask.session import Exchange, Session, Step
+from rewind.core.ask.words import clock_time
 
 MENU = (
     ("start", "How this works"),

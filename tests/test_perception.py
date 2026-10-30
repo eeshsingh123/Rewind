@@ -14,31 +14,21 @@ from rewind.adapters.video.ffmpeg import FfmpegVideoTools
 from rewind.contracts import (
     Box,
     Charge,
-    Entity,
-    ExitsView,
     Observation,
     RleMask,
-    RuleSpec,
+    SamplingPlan,
+    SamplingWindow,
     TimeSpan,
 )
-from rewind.core.perception import (
-    STRATEGIES,
-    ActivitySample,
-    Ingest,
-    PerceptionRunner,
-    PlanInput,
-    Planner,
-    ProxyMaker,
-)
+from rewind.core.perception import ActivitySample, Ingest, PerceptionRunner, ProxyMaker
 from rewind.core.ports import Segmentation, SegmentRequest, VideoInfo
 
 pytestmark = pytest.mark.anyio
 
-JAR_RULE = RuleSpec(
-    entity=Entity(key="jar", phrase="glass jar"),
-    parts={"cap": "jar lid"},
-    checkpoint=ExitsView(),
-)
+
+def _plan(footage_id: str, spans: Sequence[TimeSpan], *concepts: str) -> SamplingPlan:
+    windows = tuple(SamplingWindow(span=s, fps=2.0, concepts=concepts) for s in spans)
+    return SamplingPlan(footage_id=footage_id, windows=windows)
 
 
 class FakeVideo:
@@ -69,9 +59,7 @@ class FakeVideo:
 
 # Movement for the first four seconds of ten, then a stopped line.
 class FakeActivity:
-    async def sample(
-        self, source: Path, sample_fps: float, regions: Sequence[Box]
-    ) -> tuple[ActivitySample, ...]:
+    async def sample(self, source: Path, sample_fps: float) -> tuple[ActivitySample, ...]:
         return tuple(ActivitySample(t=i / 5, score=0.05 if i < 20 else 0.0) for i in range(1, 50))
 
 
@@ -131,16 +119,12 @@ async def test_a_new_concept_on_processed_footage_pays_only_for_itself(
     segmenter = FakeSegmenter()
     await blobs.write("footage/line.mp4", b"original")
     ingested = await ingest.ingest("f1", "line1", "footage/line.mp4")
-    planner = Planner(STRATEGIES)
+    jar_things = ("glass jar", "jar lid")
+    spans = ingested.active_spans
 
-    def plan(*rules: RuleSpec):
-        return planner.plan(
-            "dense_track", PlanInput(ingested.footage, ingested.active_spans, rules, 2.0)
-        )
-
-    await runner.run(ingested.footage, plan(JAR_RULE), segmenter)
-    label_rule = JAR_RULE.model_copy(update={"parts": {"label": "paper label"}})
-    result = await runner.run(ingested.footage, plan(JAR_RULE, label_rule), segmenter)
+    await runner.run(ingested.footage, _plan("f1", spans, *jar_things), segmenter)
+    every = _plan("f1", spans, *jar_things, "paper label")
+    result = await runner.run(ingested.footage, every, segmenter)
 
     assert [r.prompt.text for r in segmenter.requests[2:]] == ["paper label"]  # type: ignore[union-attr]
     assert (result.paid_requests, result.cached_requests) == (1, 2)
@@ -185,10 +169,7 @@ async def test_a_request_that_runs_out_of_slots_is_continued_with_the_same_ids(
     ingested = await Ingest(blobs, video, FakeActivity(), proxies, 2.0).ingest(
         "f1", "line1", "footage/line.mp4"
     )
-    plan = Planner(STRATEGIES).plan(
-        "dense_track",
-        PlanInput(ingested.footage, (TimeSpan(start=0, end=10),), (JAR_RULE,), fps=2.0),
-    )
+    plan = _plan("f1", (TimeSpan(start=0, end=10),), "glass jar", "jar lid")
 
     result = await runner.run(ingested.footage, plan, segmenter)
 

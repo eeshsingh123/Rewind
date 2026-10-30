@@ -1,6 +1,6 @@
 from pydantic import Field
 
-from rewind.contracts.base import Concept, Contract, Id, Key, Seconds, TimeSpan
+from rewind.contracts.base import Concept, Contract, Id, Seconds, TimeSpan
 from rewind.contracts.geometry import Box, RleMask
 
 
@@ -26,10 +26,8 @@ class SamplingWindow(Contract):
     span: TimeSpan
     fps: float = Field(gt=0)
     concepts: tuple[Concept, ...] = Field(min_length=1)
-    region: Box | None = None
 
 
 class SamplingPlan(Contract):
     footage_id: Id
-    strategy: Key
     windows: tuple[SamplingWindow, ...]

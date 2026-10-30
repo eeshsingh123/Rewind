@@ -26,8 +26,7 @@ from rewind.adapters.models.muse_voice import MuseVoice
 from rewind.adapters.storage.sql import SqlRepository
 from rewind.app.web import web_router
 from rewind.contracts import TimeSpan
-from rewind.core.analysis import Mark
-from rewind.core.ask import TURN_JOB, Chats, ChatSettings, Inbox, Runs, Samples, Voice
+from rewind.core.ask import TURN_JOB, Chats, ChatSettings, Inbox, Mark, Runs, Samples, Voice
 from rewind.core.budget import (
     EPOCH,
     BudgetedTranscriber,
@@ -42,8 +41,7 @@ from rewind.core.ports import (
     Transcriber,
     UserMessage,
 )
-from tests.fakes import RECORDINGS, ScriptedModel, completion
-from tests.test_analysis import FakeSam
+from tests.fakes import RECORDINGS, FakeSam, ScriptedModel, completion
 from tests.test_ask import FIRST_LOOK, PHOTO_LOOK, FakeImageSam, FakeMedia, Flow, _call
 from tests.test_web import _answering, _settled, _upload
 

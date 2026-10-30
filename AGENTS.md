@@ -13,14 +13,14 @@ Keep these short and plain. No codes or ids for tasks; name things by what they 
 
 ## Product principles
 
-- Every finding is provable: a violation always links to a clip, and an insight always links to the events behind it.
+- Every finding is provable: each claim links to the evidence behind it, with a clip or a photo with boxes drawn where it has one.
 - No setup: upload and ask. No lines or rules to create first.
 - Use Muse fully: it watches, plans and reasons. SAM and code make per-item counts and times exact, and code checks every claim against tool results.
 - A paid call never happens twice for the same input. SAM only when a question needs it. Always `muse-spark-1.3-contributor`.
 - Every channel (web, Telegram, WhatsApp) reaches the same agent, shows the same live steps and gets the same answers.
 - Works for any footage: never new code for a new scene. Never tune logic or thresholds to one clip; check a fix on another kind of footage.
 - UI is clean and minimal, in warm, calm neutral colours.
-- Plain words first. Replies are read by a line manager, not an engineer: times instead of ids ("the box at 00:14"), one line per rule, boxes drawn on the proof, as few messages as possible.
+- Plain words first. Replies are read by a line manager, not an engineer: times instead of ids ("the box at 00:14"), one line per finding, boxes drawn on the proof, as few messages as possible.
 
 ## How we work
 

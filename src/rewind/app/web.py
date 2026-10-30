@@ -15,7 +15,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from rewind.adapters.storage.local_disk import LocalDiskBlobStore
-from rewind.app.upload import MAX_UPLOAD_BYTES
 from rewind.contracts import Box
 from rewind.core.ask import (
     SPENT,
@@ -30,6 +29,7 @@ from rewind.core.ask import (
 )
 from rewind.core.ports import BlobStoreError
 
+MAX_UPLOAD_BYTES = 2 * 1024**3
 PAGE = Path(__file__).parent / "static"
 # Links are made fresh each time a page loads, so they only need to outlast a long visit.
 _MEDIA_TTL_S = 6 * 3600

@@ -19,23 +19,15 @@ from rewind.contracts import (
     TimeSpan,
     Track,
 )
-from rewind.core.analysis import (
-    PartLooker,
-    SheetMaker,
-    Sighting,
-    Tile,
-    clock_time,
-    join_words,
-    naive_tracks,
-)
-from rewind.core.analysis.proof import Mark
-from rewind.core.analysis.replies import plural
-from rewind.core.analysis.timeline import Judged, find_stops, usual_gap
 from rewind.core.ask.areas import Area, AreaMarker, short_tag
 from rewind.core.ask.evidence import Evidence, Notebook
+from rewind.core.ask.marks import Mark, Sighting
 from rewind.core.ask.session import Marked, Session
+from rewind.core.ask.sheets import SheetMaker, Tile
+from rewind.core.ask.stops import find_stops, usual_gap
 from rewind.core.ask.watch import Watcher
-from rewind.core.perception import PerceptionRunner
+from rewind.core.ask.words import clock_time, join_words, plural
+from rewind.core.perception import PartLooker, PerceptionRunner, naive_tracks
 from rewind.core.ports import (
     BlobStore,
     CompletionRequest,
@@ -407,11 +399,9 @@ class Toolset:
         usual = usual_gap(ends)
         pace = f"; usually {usual:.1f} s from one {thing} leaving to the next" if usual else ""
         evidence = [notebook.add("measured", f"{count}{place}{pace}.", clip, marks)]
-        judged = [Judged(rule_id="measure", track_id=i.label, t=t)
-                  for i, t in zip(items, ends, strict=True)]  # fmt: skip
         paths = [[(o.t, (o.box.x0 + o.box.x1) / 2, (o.box.y0 + o.box.y1) / 2)
                   for o in item.track.observations] for item in items]  # fmt: skip
-        stops = find_stops(judged, bench.session.active_spans, footage.duration_s, paths)
+        stops = find_stops(ends, bench.session.active_spans, footage.duration_s, paths)
         for stop in stops:
             still = (
                 "nothing moved"
@@ -516,7 +506,6 @@ class Toolset:
         spans = bench.session.active_spans or (TimeSpan(start=0, end=footage.duration_s),)
         plan = SamplingPlan(
             footage_id=footage.id,
-            strategy="ask",
             windows=tuple(
                 SamplingWindow(span=span, fps=self._track_fps, concepts=(thing,)) for span in spans
             ),

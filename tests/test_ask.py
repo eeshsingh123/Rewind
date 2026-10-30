@@ -1,5 +1,5 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,11 +8,11 @@ from pydantic import JsonValue
 
 from rewind.adapters.storage.local_disk import LocalDiskBlobStore
 from rewind.adapters.storage.parquet_observations import ParquetObservationStore
-from rewind.contracts import Observation
-from rewind.core.analysis import Mark, PartLooker
+from rewind.contracts import Observation, TimeSpan
 from rewind.core.ask import (
     AskAgent,
     AskLimits,
+    Mark,
     Proofs,
     Segmenters,
     Sessions,
@@ -20,11 +20,20 @@ from rewind.core.ask import (
     Toolset,
     Watcher,
 )
-from rewind.core.perception import Ingest, PerceptionRunner, ProxyMaker
+from rewind.core.ask.evidence import untraceable
+from rewind.core.ask.stops import find_stops
+from rewind.core.perception import Ingest, PartLooker, PerceptionRunner, ProxyMaker
 from rewind.core.ports import Segmentation, SegmentRequest, ToolCall, ToolResultMessage, UserMessage
-from tests.fakes import ScriptedModel, completion
-from tests.test_analysis import FakeActivity, FakeSam, FakeVideo, _frames, _seen
-from tests.test_insights import FakeSheet
+from tests.fakes import (
+    FakeActivity,
+    FakeSam,
+    FakeSheet,
+    FakeVideo,
+    ScriptedModel,
+    billed_frames,
+    completion,
+    seen,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -71,8 +80,8 @@ class FakeImageSam(FakeSam):
         self.prompts.append(getattr(request.prompt, "text", ""))
         found: list[Observation] = []
         if self.prompts[-1] == "box":
-            found = [_seen(request, "box", 0.0, i, x, 0.2) for i, x in enumerate((0.6, 0.1, 0.35))]
-        return Segmentation(tuple(found), (_frames(1),))
+            found = [seen(request, "box", 0.0, i, x, 0.2) for i, x in enumerate((0.6, 0.1, 0.35))]
+        return Segmentation(tuple(found), (billed_frames(1),))
 
 
 @dataclass
@@ -258,3 +267,51 @@ async def test_a_question_about_one_area_counts_only_inside_it(tmp_path: Path) -
     assert (finding.text, finding.kind, finding.proof_key) == (unseen, "seen", None)
     assert len(flow.media.drawn) == drawn
     assert "Could not make out the back wall" in [s.text for s in flow.steps if s.done][-1]
+
+
+def _gap_in_output() -> list[float]:
+    return [float(t) for t in (*range(0, 21, 2), *range(35, 61, 2))]
+
+
+def test_a_long_gap_in_output_where_nothing_moved_is_a_stop_and_says_what_it_cost() -> None:
+    moving = (TimeSpan(start=0, end=21.5), TimeSpan(start=33.0, end=60.0))
+
+    [stop] = find_stops(_gap_in_output(), moving, 60.0)
+
+    assert (stop.gap.start, stop.gap.end) == (20.0, 35.0)
+    assert (stop.stood, stop.seen) == (TimeSpan(start=21.5, end=33.0), "no_motion")
+    assert stop.usual_gap_s == 2.0
+    assert stop.lost_items == 6
+
+
+def test_items_standing_still_make_a_stop_and_a_gap_without_evidence_does_not() -> None:
+    def speed(t: float) -> float:
+        return 0.0 if 24 <= t < 32 else 0.05
+
+    # Two items in view the whole time, moving with the belt except while it stood.
+    paths = [[(t / 2, x, 0.5) for t, x in zip(range(121), _positions(speed, start), strict=True)]
+             for start in (0.1, 0.4)]  # fmt: skip
+    always_moving = (TimeSpan(start=0, end=60.0),)
+
+    [held] = find_stops(_gap_in_output(), always_moving, 60.0, paths)
+    unproven = find_stops(_gap_in_output(), always_moving, 60.0)
+
+    assert (held.stood, held.seen) == (TimeSpan(start=24.0, end=32.0), "items_still")
+    assert unproven == ()
+
+
+def _positions(speed: Callable[[float], float], start: float) -> list[float]:
+    x, found = start, []
+    for step in range(121):
+        found.append(x)
+        x += speed(step / 2) * 0.5
+    return found
+
+
+def test_a_claim_with_a_number_its_evidence_does_not_state_is_caught() -> None:
+    sources = ["Stop: no jar came through from 00:20 to 00:35 (15 s); about 6 jars lost."]
+
+    assert untraceable("The line stopped at 0:20 for 15 s, about six jars lost.", sources) == ()
+    assert untraceable("The line stopped for 15 s and lost 7 jars at 00:21.", sources) == (
+        "7", "00:21"
+    )  # fmt: skip

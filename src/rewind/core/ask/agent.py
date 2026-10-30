@@ -7,12 +7,12 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rewind.contracts import Charge, CostEstimate, TimeSpan
-from rewind.core.analysis import clock_time
 from rewind.core.ask.areas import Area
 from rewind.core.ask.evidence import Claim, Notebook
 from rewind.core.ask.proofs import Proofs
 from rewind.core.ask.session import Exchange, Finding, Marked, OnStep, Session, Sessions, Step
 from rewind.core.ask.tools import MARKED_THING, AskTool, Bench, Segmenters, Started, ToolError
+from rewind.core.ask.words import clock_time
 from rewind.core.ports import (
     AssistantMessage,
     ChatMessage,

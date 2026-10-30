@@ -2,6 +2,7 @@ from rewind.core.ask.agent import AskAgent, AskLimits
 from rewind.core.ask.areas import Area
 from rewind.core.ask.chat import TURN_JOB, Activity, Chats, ChatSettings, Inbox
 from rewind.core.ask.evidence import Claim, Evidence, Kind, Notebook
+from rewind.core.ask.marks import ClipMaker, Mark, ProofMarks, Sighting
 from rewind.core.ask.proofs import Proofs
 from rewind.core.ask.replies import MENU
 from rewind.core.ask.runs import SPENT, WEB_WORKSPACE, Hands, Live, Runs
@@ -19,6 +20,7 @@ from rewind.core.ask.session import (
     footage_suffix,
     is_photo,
 )
+from rewind.core.ask.sheets import SheetMaker, Tile
 from rewind.core.ask.tools import Segmenters, Toolset
 from rewind.core.ask.voice import SpeechMaker, Voice
 from rewind.core.ask.watch import FirstLook, Moment, Watcher
@@ -35,6 +37,7 @@ __all__ = [
     "ChatSettings",
     "Chats",
     "Claim",
+    "ClipMaker",
     "Evidence",
     "Exchange",
     "Finding",
@@ -43,11 +46,13 @@ __all__ = [
     "Inbox",
     "Kind",
     "Live",
+    "Mark",
     "Marked",
     "Moment",
     "Notebook",
     "OnStep",
     "PhotoReader",
+    "ProofMarks",
     "Proofs",
     "Runs",
     "Sample",
@@ -55,8 +60,11 @@ __all__ = [
     "Segmenters",
     "Session",
     "Sessions",
+    "SheetMaker",
+    "Sighting",
     "SpeechMaker",
     "Step",
+    "Tile",
     "Toolset",
     "Voice",
     "Watcher",

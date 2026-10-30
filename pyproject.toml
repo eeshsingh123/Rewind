@@ -1,7 +1,7 @@
 [project]
 name = "rewind"
 version = "0.1.0"
-description = "Camera checker for production and packing lines, driven by plain-English rules over chat."
+description = "Ask your footage anything from the web, Telegram or WhatsApp, with proof for every claim."
 readme = "AGENTS.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [

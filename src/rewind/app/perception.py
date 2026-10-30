@@ -13,13 +13,7 @@ from rewind.adapters.video.ffmpeg import FfmpegVideoTools
 from rewind.adapters.video.opencv import OpenCvActivityProbe
 from rewind.app.settings import Settings
 from rewind.core.budget import BudgetedSegmenter, BudgetLimits, BudgetScope, CostRecords, Ledger
-from rewind.core.perception import (
-    STRATEGIES,
-    Ingest,
-    PerceptionRunner,
-    Planner,
-    ProxyMaker,
-)
+from rewind.core.perception import Ingest, PerceptionRunner, ProxyMaker
 from rewind.core.ports import Segmenter
 
 
@@ -29,7 +23,6 @@ class Perception:
     video_tools: FfmpegVideoTools
     proxies: ProxyMaker
     ingest: Ingest
-    planner: Planner
     runner: PerceptionRunner
     observations: ParquetObservationStore
     ledger: Ledger
@@ -71,7 +64,6 @@ def build_perception(
         video_tools=video_tools,
         proxies=proxies,
         ingest=Ingest(blobs, video_tools, OpenCvActivityProbe(), proxies, settings.track_fps),
-        planner=Planner(STRATEGIES),
         runner=PerceptionRunner(proxies, observations),
         observations=observations,
         ledger=Ledger(costs, limits),

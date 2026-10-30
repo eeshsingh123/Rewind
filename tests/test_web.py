@@ -24,8 +24,7 @@ from rewind.core.ports import (
     Segmentation,
     SegmentRequest,
 )
-from tests.fakes import ScriptedModel, completion
-from tests.test_analysis import FakeSam, _frames, _seen
+from tests.fakes import FakeSam, ScriptedModel, billed_frames, completion, seen
 from tests.test_ask import FIRST_LOOK, PHOTO_LOOK, FakeImageSam, Flow, _call
 
 pytestmark = pytest.mark.anyio
@@ -42,12 +41,12 @@ class FollowingSam(FakeSam):
             return await super().segment(request)
         self.calls += 1
         self.prompts.append(request.prompt.concept)
-        seen = [
-            _seen(request, request.prompt.concept, t, 0, 0.1 + 0.05 * t, 0.3)
+        found = [
+            seen(request, request.prompt.concept, t, 0, 0.1 + 0.05 * t, 0.3)
             for t in request.frame_times
             if 2 <= t <= 6
         ]
-        return Segmentation(tuple(seen), (_frames(len(request.frame_times)),))
+        return Segmentation(tuple(found), (billed_frames(len(request.frame_times)),))
 
 
 class SpentModel(ScriptedModel):
