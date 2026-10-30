@@ -8,11 +8,8 @@ How code is written here. Read before writing code.
 src/rewind/
   contracts/   frozen Pydantic models shared by everything; depends on nothing but pydantic
   core/        domain logic and ports (Protocols); depends only on contracts
-    perception/   ingest, idle skip, sampling planner, SAM runner, cache
-    rules/        rule language, predicates, engine, zones, compiler
-    analysis/     a check end to end: tracks, parts, proof clips, replies
-    ask/          a photo or video session: Muse's first look, the agent, its tools, areas, checked claims, and the chat flow every channel shares
-    conversation/ the old chat flow with lines and rules; no longer wired in
+    perception/   ingest, idle skip, SAM runner, cache, stills, tracks
+    ask/          a photo or video session: Muse's first look, the agent, its tools, areas, stops, proof, checked claims, and the chat flow every channel shares
     budget/       ledger and budget guard
   adapters/    one module per external system, each implementing a core port
     segmenters/ models/ storage/ video/ jobs/ channels/
@@ -25,7 +22,7 @@ tests/         focused tests, and recordings/ of real API responses
 
 ## Design
 
-- Open/closed first. A new chat channel, segmenter, language model, storage, rule predicate or sampling strategy is a new module that implements an existing port or registry entry. It must not require edits to the core.
+- Open/closed first. A new chat channel, segmenter, language model, storage or agent tool is a new module that implements an existing port or registry entry. It must not require edits to the core.
 - Dependencies point inward: `app -> adapters -> core -> contracts`. The core never imports an SDK, `httpx`, `cv2` or `fastapi`. `import-linter` enforces this in `poe check`.
 - Ports are `typing.Protocol` classes owned by the core. Only `app/` builds adapters and passes them in. No DI framework, no global singletons.
 - One reason to change per module. A change that touches more than two modules: rethink the boundary first.
@@ -45,7 +42,7 @@ tests/         focused tests, and recordings/ of real API responses
 - Errors are handled where something can be done about them; otherwise they propagate. No silent catches, no bare `except`.
 - Every paid call goes through the ledger and the budget guard.
 - Secrets come only from settings (the environment, or `.env`). Never logged, never in URLs, never committed.
-- Tests are few and focused: core behaviour and flows that cross layers. Adapters are tested against recordings in `tests/recordings/`, never live APIs in CI. Re-record `tests/recordings/muse/compile_examples.json` (`scripts/smoke_rules.py --record`) whenever the compile prompt or rule schema changes. No tests only for coverage.
+- Tests are few and focused: core behaviour and flows that cross layers. Adapters are tested against recordings in `tests/recordings/`, never live APIs in CI. No tests only for coverage.
 
 ## Git
 

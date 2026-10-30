@@ -4,14 +4,14 @@ Why things are the way they are. Only decisions that still shape upcoming work a
 
 ## Product
 
-**Ask the footage: upload, ask, watch it work (2026-10-30, replaces "rules first").** Any photo or video, any question, no setup. One upload is a session; there are no lines and no rules to write first, and questions are asked per upload, with no saved standards. Muse goes over it once on upload and offers a summary, what stands out and questions to try. Each question is answered by a Muse agent that plans its own steps with tools (`watch`, `find`, `look`, `measure`, `area`, and `follow` when a box was dragged), and every step is shown live. There is no `clip` tool: code attaches proof to each kept claim, so Muse cannot forget it. Any use case with a photo or a video works: factory lines, dark stores, shops, supermarkets. No prompt may name or favour one.
-Why: rules made the product rigid (one kind of question, only items leaving the view) and the setup felt like work. Muse reads a whole video well and cheaply (jar clip: the stop right, $0.0025), so it should plan and reason, not only translate.
+**Ask the footage: upload, ask, watch it work (2026-10-30).** Any photo or video, any question, no setup. One upload is a session; there are no lines and no rules to write first, and questions are asked per upload, with no saved standards. Muse goes over it once on upload and offers a summary, what stands out and questions to try. Each question is answered by a Muse agent that plans its own steps with tools (`watch`, `find`, `look`, `measure`, `area`, and `follow` when a box was dragged), and every step is shown live. There is no `clip` tool: code attaches proof to each kept claim, so Muse cannot forget it. Any use case with a photo or a video works: factory lines, dark stores, shops, supermarkets. No prompt may name or favour one.
+Why: a fixed rule language allowed one kind of question and the setup felt like work. Muse reads a whole video well and cheaply (jar clip: the stop right, $0.0025), so it should plan and reason, not only translate.
 
 **Every claim still has proof.** Answers cite tool results (a time, an item, a clip). Code drops any time or number not in them and marks each claim "measured" (code counted it from SAM tracks) or "seen" (Muse judged it from video or crops). Muse's whole-video look finds where to look; per-item claims are confirmed with SAM tracks and crops before they are stated as counts.
 Why: Muse on the whole jar clip got the stop right but found only 1 of 4 missing labels and missed the cap; a close look at each item fixes that.
 
 **A photo is footage of one frame.** The `Footage` contract stays as it is: a photo is stored as one upright JPEG, one second long at 1 fps, and `Session.photo` says so. The same entry points serve both, and only what has no meaning on a photo branches: `watch` is not offered, `measure` is a count, items are named by place instead of time, and the proof is the photo with boxes instead of a clip.
-Why: phases 2 and 3 should not care which they got, and the old flow's contract must not change. Upright, because phones store rotation in EXIF and every box must fit what a person sees.
+Why: the tools should not care which they got. Upright, because phones store rotation in EXIF and every box must fit what a person sees.
 
 **iPhone footage needs its own care.** Photos are read with Pillow and pillow-heif, since neither OpenCV nor ffmpeg reads HEIC. A video's size comes with its rotation applied: a portrait video is stored sideways, and the swapped size put SAM's boxes on stills in the wrong place. Every video also gets one playable copy (H.264, AAC, up to 1080p, true timing), since Chrome cannot play HEVC. The SAM proxy is not used for this: it has no sound and its frames are evenly respaced, which would drift from true time on a phone's variable frame rate.
 
@@ -33,9 +33,6 @@ Why: one gesture, and the agent picks by what was asked.
 
 **Test footage: two sim clips with answer keys.** `data/sim/s1_jar_line-seed2` and `data/sim/s2_carton_packing-seed2`, each with `ground_truth.json`. Real stock clips are added when one shows a visible fault. The Blender sim (`sim/`) stays frozen.
 
-**Insights: code finds the facts, Muse picks and words them, code checks every claim.** Each check saves a timeline per recording: every item each rule judged, pass or fail, and the stops. A stop is a gap in output longer than 3× the line's own usual gap (at least 5 s); the idle spans say whether the line stood still. From that, code writes a numbered fact sheet: stops and the output they cost, pace, each failure, the other recordings of the line, and patterns with how often chance alone would make them (failures in a row, failures that started or stopped at a moment, every Nth item, failures right after a restart). Notable means chance would make it less than 1 time in 20. Muse is called only when there is a notable fact. It gets the sheet plus one picture of cropped tiles (failed items boxed, the stop) and returns at most 3 insights, each citing its facts and a clip. Code drops any insight that cites an unknown fact or states a number or time that is not in its facts. A normal run gets one quiet line from code, and no call. Questions in chat (`ask_footage`) use the same sheet: unanswerable ones say why and suggest a rule. Answers are cached by their inputs, so the same question never costs twice.
-Why: every finding must be provable, and an insight shown on every run gets ignored. Muse adds what the numbers cannot: picking what matters, linking facts, and saying what a failure looks like.
-
 **Chat behaviour.** Fixed commands (`/start`, `/help`) make no model call, and any other command gets the help, so a stale menu entry never reaches the agent. A photo or a video starts a session and gets the first look with suggested questions to tap; a caption is the first question. Any message after that is a question about the latest footage, remembered per chat over a restart. Each question has a $0.50 budget, and each chat has its own workspace and daily cap. Progress is one message, edited in place where the channel can edit; WhatsApp cannot, so it gets one opening line, the typing indicator and the answer. The answer is one message with one proof, a cost line and the timeline link, which is left out on a local address. A file too big to fetch gets the web page's address; a proof too big to send leaves the answer and the link.
 A suggested question's value is `q:<session>:<place>`, so it fits Telegram's 64 bytes and a tap under older footage still asks about that footage. Buttons stay after a tap, so the other questions can still be asked.
 WhatsApp's reply buttons fit no question (20 characters), so questions go as one list message, each running from the row's title into its description.
@@ -44,8 +41,12 @@ WhatsApp's reply buttons fit no question (20 characters), so questions go as one
 
 ## Architecture
 
-**Muse plans and reasons; SAM tracks; code measures and checks.** Muse watches video, looks at crops and decides which tools to call. SAM 3.1 tracks things once per video and concept, stored and cached. Code counts and times from those tracks, draws the proof, and checks every claim in the answer. The rule engine is one `measure` tool.
+**Muse plans and reasons; SAM tracks; code measures and checks.** Muse watches video, looks at crops and decides which tools to call. SAM 3.1 tracks things once per video and concept, stored and cached. Code counts and times from those tracks, draws the proof, and checks every claim in the answer.
 Why: Muse is cheap and good at the whole picture; SAM and code make per-item counts and times exact and repeatable.
+
+**SAM tracks.** SAM's object ids are reused across items, so item identity is our own tracking. SAM follows at most 16 objects per request; when full, the rest of the window is sent again from that frame. Boxes are fractions of the frame (0..1), so they survive any proxy resolution.
+
+**Stops are read from the footage's own pace.** `measure` calls a gap in output a stop when it is longer than 3× the usual gap between items (at least 5 s) and something shows it: nothing moved in view, or the items in view stood still. A gap with neither may be items SAM missed, so it is no stop.
 
 **Muse video.** `input_video` with a `file_id` from the Files API (MP4 only, set an expiry). Muse reads the visual sequence and any audio. The docs do not say how video is sampled or billed; on the 60 s jar clip it was 15.7k input tokens and 43 s.
 
@@ -66,20 +67,10 @@ Why: no hosting account or credit needed before the deadline; a host later is ne
 
 **Budget for experiments: $150 in total.** Use Muse freely (a whole-video look costs well under a cent per minute of footage). SAM is the costly call; the agent calls it only when a question needs per-item counts or times.
 
-**How we keep SAM cheap.** The frames we send are the bill, so: re-encode to a 720p proxy at the planned fps; skip idle spans (frame differences inside the zones); let the rules decide which concepts and when; track the item continuously but look for parts once per item, with one image call at the moment it is judged; cache by (video, frame, concept, model) so a rerun costs $0. Never one request per item (the 50-frame minimum makes that about 10× dearer).
+**How we keep SAM cheap.** The frames we send are the bill, so: re-encode to a 720p proxy at the planned fps; skip idle spans (frame differences); track only what a question names; cache by (video, frame, concept, model) so a rerun costs $0. Never one request per item (the 50-frame minimum makes that about 10× dearer).
 
-**Guardrails.** Every paid call goes through the ledger and the budget guard. A cost estimate comes before every check. Each workspace has a daily cap; a global kill switch stops all paid calls at $120 (never above $140). A failed paid call still counts toward the caps. Webhooks are answered 200 at once and de-duplicated by message id. The agent has caps on tool calls and tokens per turn.
+**Guardrails.** Every paid call goes through the ledger and the budget guard. Each paid call is priced against the caps before it is made. Each workspace has a daily cap; a global kill switch stops all paid calls at $120 (never above $140). A failed paid call still counts toward the caps. Webhooks are answered 200 at once and de-duplicated by message id. The agent has caps on tool calls and tokens per turn.
 Why: no runaway spend; webhook retries and agent loops are how costs usually blow up.
-
-## How rules are judged
-
-- `at_checkpoint`: the part was seen within the 1.0 s before the checkpoint. `ever_before`: seen any time from the item's first sighting to the checkpoint.
-- "Leaves the view" is judged only when a track ends at the frame border more than 1 s before the footage ends. Items still in view, lost mid-frame, never seen whole, or not moving are not judged. Parts are checked in the last second the item was whole in frame, not the sliver at the border.
-- "At the end of the footage" judges every item as last seen. A sentence that names no moment means "leaves the view".
-- `count_at_least` counts parts in one frame. `before(a, b)` compares first sightings.
-- One violation per item per checkpoint, with the reasons joined. Rates are judged per whole minute.
-- SAM's object ids are reused across items, so item identity is our own tracking. SAM follows at most 16 objects per request; when full, the rest of the window is sent again from that frame.
-- Boxes and zones are fractions of the frame (0..1), so they survive any proxy resolution.
 
 ## Accuracy
 
