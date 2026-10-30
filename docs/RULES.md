@@ -16,7 +16,7 @@ src/rewind/
     budget/       ledger and budget guard
   adapters/    one module per external system, each implementing a core port
     segmenters/ models/ storage/ video/ jobs/ channels/
-  app/         composition root: settings, wiring, FastAPI routes
+  app/         composition root: settings, wiring, FastAPI routes, the web page in static/
 sim/           Blender scenario renderer (frozen); depends on contracts only
 eval/          scoring (empty until the accuracy table is built)
 scripts/       live smoke runs and the tunnel launcher; never run in CI

@@ -30,7 +30,7 @@ Start it with a public tunnel instead, for WhatsApp and upload links (needs `clo
 uv run poe live
 ```
 
-Then open the bot in Telegram and send `/start`.
+Then open http://127.0.0.1:8000 for the web page, or the bot in Telegram and send `/start`.
 
 ## Develop
 

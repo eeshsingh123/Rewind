@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from rewind.contracts import Box, Charge, Footage, Observation, SamplingPlan, TimeSpan
 from rewind.core.perception.cache import CachedFrames, CacheKey, ObservationStore, frame_index
 from rewind.core.perception.proxy import ProxyClip, ProxyMaker
-from rewind.core.ports import ConceptPrompt, Segmenter, SegmentRequest
+from rewind.core.ports import (
+    ConceptPrompt,
+    ObjectPrompt,
+    ObjectPrompts,
+    Segmenter,
+    SegmentRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +73,38 @@ class PerceptionRunner:
             paid_requests=paid,
             cached_requests=cached,
         )
+
+    # Follows the one thing under a box through the whole video, from that frame both ways. The
+    # whole video, since what is marked may stand still where nothing else moves.
+    async def follow(
+        self, footage: Footage, t: float, box: Box, fps: float, segmenter: Segmenter, concept: str
+    ) -> PerceptionResult:
+        marked = f"follow {t:.2f} {box.x0:.3f} {box.y0:.3f} {box.x1:.3f} {box.y1:.3f}"
+        key = CacheKey(footage.content_hash, marked, segmenter.model_version)
+        stored = await self._store.load(key, footage.id)
+        if stored.frames:
+            seen = tuple(o for found in stored.frames.values() for o in found)
+            return PerceptionResult(seen, (), paid_requests=0, cached_requests=1)
+        whole = TimeSpan(start=0, end=footage.duration_s)
+        clip = await self._proxies.ensure(footage.content_hash, footage.original_key, [whole], fps)
+        request = SegmentRequest(
+            footage_id=footage.id,
+            media_key=clip.proxy.blob_key,
+            width=clip.width,
+            height=clip.height,
+            frame_times=clip.frame_times,
+            prompt=ObjectPrompts(concept, (ObjectPrompt(t, 0, box),)),
+        )
+        result = await segmenter.segment(request)
+        frames: dict[int, tuple[Observation, ...]] = {
+            frame_index(frame_t, footage.fps): () for frame_t in clip.frame_times
+        }
+        found: defaultdict[int, list[Observation]] = defaultdict(list)
+        for observation in result.observations:
+            found[frame_index(observation.t, footage.fps)].append(observation)
+        frames.update({index: tuple(seen) for index, seen in found.items()})
+        await self._store.save(key, CachedFrames(frames=frames))
+        return PerceptionResult(result.observations, result.charges, 1, 0)
 
     async def _segment(
         self, footage: Footage, clip: ProxyClip, concept: str, segmenter: Segmenter

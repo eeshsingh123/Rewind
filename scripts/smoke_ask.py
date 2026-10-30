@@ -69,7 +69,7 @@ async def main() -> None:
                 if finding.proof_key:
                     print(f"    ▶ {await blobs.local_path(finding.proof_key)}", flush=True)
             if not answer.findings:
-                print(answer.text, flush=True)
+                print(answer.answer, flush=True)
             print(f"cost ${answer.cost_usd:.4f}", flush=True)
         print(f"\nledger: ${await repository.spent_usd(EPOCH)}", flush=True)
 

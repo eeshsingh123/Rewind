@@ -116,6 +116,9 @@ class FakeVideo:
     async def cut_clip(self, source: Path, destination: Path, span: TimeSpan) -> None:
         destination.write_bytes(b"clip")
 
+    async def playable(self, source: Path, destination: Path) -> None:
+        destination.write_bytes(b"playable")
+
     async def still(self, source: Path, t: float, destination: Path) -> None:
         destination.write_bytes(b"still")
 

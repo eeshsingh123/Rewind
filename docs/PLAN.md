@@ -24,18 +24,15 @@ Muse video check on the jar clip (60 s, contributor model): the belt stop right 
 
 - Upload and ask, the agent and its tools (**not yet checked live**). One photo or video is one session. On upload Muse goes over it once and returns a summary, what stands out and 3–5 questions; the result is cached. A Muse agent answers each question with `watch` (video only), `find`, `look`, `measure` and `area`. Every step sends a progress event. Code drops any claim whose numbers or times are not in its cited evidence, marks each kept claim "measured" or "seen", and attaches the proof. Each question has a $0.50 budget and a cap on steps and tokens. A photo has no times: SAM finds items with one image call, items are named by place ("the 2nd box from the left"), and the proof is the photo with boxes. An area is marked by Muse and confirmed by SAM, and code limits counts to it.
 
+- Web page (**real upload, ffmpeg and proof rendering checked in a browser, but with Muse and SAM scripted; not yet run against the APIs**). Served at `/` by the FastAPI app. Upload or tap a sample; each session has its own link at `/s/<id>`. A video gets a timeline of clickable markers (first look below, found answers above); steps show live; each answer has its proof inline and a quiet cost line. Drag a box: on a video the agent can `follow` it, on a photo it is the part to ask about. iPhone photos (HEIC) and videos (HEVC `.mov`, portrait) work end to end. An answer is kept by footage and question, so the same one is free in any session.
+
 ## Next, in order
 
 Each phase is one branch and one PR, small enough for one session.
 
-1. **Live check of the agent.** Nothing in it has run against the APIs yet. Run `scripts/smoke_ask.py` on the s1 clip, then on a photo with a question about one area.
-   Done when: on s1, "anything wrong?" names the stop with the right times, and "which jars have no label?" finds at least 3 of 4 with clips; on the photo, an area is marked and confirmed and its count is right.
-2. **Web page.** Upload a photo or a video; a video gets a timeline of clickable markers. A chat streams the steps live, with proof inline. Warm, neutral, calm colours; clean and minimal. Served by the existing FastAPI app. Also:
-   - Ready samples: 2–3 clips a visitor taps to get a cached answer at once, at no cost.
-   - Each answer ends with a quiet cost line ("cost $0.003").
-   - Point to track: drag a box on a frame and ask "follow this"; SAM tracks it from the box prompt.
-   - Every session has its own link, so a chat can point to it.
-   Done when: the owner uploads a clip in the browser, asks two questions and sees each step and each clip; a sample answers at once; a dragged box is tracked.
+1. **Live check of the agent and the page.** Nothing in the agent has run against the APIs yet. Run `scripts/smoke_ask.py` on the s1 clip, then on a photo with a question about one area. Then try the page: upload, ask, drag a box to follow.
+   Done when: on s1, "anything wrong?" names the stop with the right times, and "which jars have no label?" finds at least 3 of 4 with clips; on the photo, an area is marked and confirmed and its count is right; a dragged box is tracked.
+2. **Prime the samples.** `uv run python scripts/prime_samples.py` once the agent is good: it pays once, and every later tap is instant and free. Until then a sample opens but answers only when asked, and spends.
 3. **Telegram and WhatsApp on the new agent.** Send a photo or a video: the first look comes back with suggested questions as buttons. Ask anything. Progress is one message edited in place; the answer is one message with the clip. Remove lines, rule drafts and "Looks right" from the flow. Also:
    - Voice notes in any language: Meta's speech-to-text turns the note into the question, and the answer comes back in the language asked.
    - Every answer ends with "Open the full timeline", linking to that session's web page.
@@ -58,7 +55,7 @@ If time runs short, cut from the bottom up. Never cut: proof clips, the accuracy
 - [ ] Everyone who worked on it listed on the submission page.
 - [ ] Written answers: how we used Meta products, why Meta's models matter here, feedback on them. Feedback notes so far: SAM has no fps setting, a 50-frame minimum and one concept per request; usage is missing on background polls; Muse's prompt cache hit only with `prompt_cache_key`; SAM masks are slow to decode in Python; the video docs do not say how video is billed or sampled.
 - [ ] README credits: the Pexels stock clips, and the sim's assets (sim/CREDITS.md).
-- [ ] Before judging: run the sample once so later taps are fast and free.
+- [ ] Before judging: rerun `scripts/prime_samples.py` if a prompt changed.
 
 ## Open questions for the owner
 
@@ -68,5 +65,5 @@ If time runs short, cut from the bottom up. Never cut: proof clips, the accuracy
 
 - [ ] WhatsApp keys (names in `.env.example`).
 - [ ] Film one real 1–2 minute phone clip with a known fault (for example, packing boxes on a table with one left untaped) and note the fault times. Used in the demo and the accuracy table.
-- [ ] A real shelf or store photo or video, to check changes on a second kind of footage.
+- [ ] A real shelf or store photo or video, to check changes on a second kind of footage. Save one photo as `data/samples/shelf.jpg`: it becomes the fourth sample; the page leaves it out until then.
 - [ ] Decide hosting before phase 3: judges try it live, and a tunnel to the laptop works only while it is on.
