@@ -30,6 +30,26 @@ Muse video check on the jar clip (60 s, contributor model): the belt stop right 
 
 - Everything from before the pivot removed: the old chat flow, rule engine, old analysis, sampling planner, upload page, and their tables and tests. Web and chat flows are unchanged. Old tables in existing databases are left in place and are harmless.
 
+## Found in the first live test (2026-10-30)
+
+Built on `fix/muse-token-limits`; **scripted Muse and SAM only, not yet run live**.
+
+- A follow-up took about 8 minutes on the 60 s carton clip: SAM 5:26, close looks 1:55. Now a wording that holds something already found reuses it (`Session.things`), close looks run four at a time, and the step says how long SAM will take.
+- Each question is read first (`core/ask/reading.py`): thing, conditions, part of the frame, and how conditions combine. The reading is shown with the answer. It asks back only when two meanings give different answers, once, with tappable choices on every channel.
+- `look` gives yes, no or cannot tell per item; an item it cannot tell gets a second view; `combine` is code's exact list and count, and its proof is a sheet of every match.
+- A claim about several items boxes them all, tags say what was seen, a count of the items cited passes the check, and dropped claims are mentioned. A cut proof clip says so.
+
+Check live: time a follow-up, a two-condition question, a question back, and whether "cannot tell" drops.
+
+- SAM's long video requests stop noticing what arrives after their first moments: on the parcel clip, at 00:19 they saw none of the parcels on the belt, while a fresh request saw them all. Tracking now runs in 5 s windows that share a frame, three at once. Checked live on that clip: the box at 00:19 is found, 107 s, $0.07, 34 items. Observations from before this are ignored, so each thing is tracked once more.
+
+- Finding the right things (`core/ask/names.py`, `distinct_tracks`). Muse suggests names for the thing from the footage, code tries each on three stills and tracks the one or two that add the most, side by side. Tracks that are one item become one: under two names, or a still thing noticed again in its place. Muse then looks once at each item and drops what is clearly not one. An area is still a rectangle, so Muse also looks at each item in it and drops those clearly not in that place, and "how many" now gets one total. Checked live on the parcel clip: both parcels missed before are found (00:16 and 00:18), wall bits, the bin in front and the pile behind are dropped, and the answer is "17 parcels on the conveyor belt" against 14–15 really there. A first ask takes about 3:30 and costs about $0.09.
+
+Still open, from that run:
+- A name can lose moving items for a stretch: "plastic mailer" saw the black and blue parcels only until 00:04.5, so they have no track from there to 00:13, and one came back as a second item. This, and items Muse cannot place, are why 17 is above 14–15.
+- Each item is judged at its largest view, which can be before a change happens to it (a label added further down the line). A combined proof has no marker on the timeline.
+- A long video costs double with two names, so one over about 2 minutes may hit the $0.50 question budget.
+
 ## Next, in order
 
 Each phase is one branch and one PR, small enough for one session.
@@ -55,7 +75,7 @@ If time runs short, cut from the bottom up. Never cut: proof clips, the accuracy
 - [ ] Public GitHub repo; check it opens logged out.
 - [ ] 3-minute demo video on YouTube showing what was built; check it opens logged out.
 - [ ] Everyone who worked on it listed on the submission page.
-- [ ] Written answers: how we used Meta products, why Meta's models matter here, feedback on them. Feedback notes so far: SAM has no fps setting, a 50-frame minimum and one concept per request; usage is missing on background polls; Muse's prompt cache hit only with `prompt_cache_key`; SAM masks are slow to decode in Python; the video docs do not say how video is billed or sampled.
+- [ ] Written answers: how we used Meta products, why Meta's models matter here, feedback on them. Feedback notes so far: SAM has no fps setting, a 50-frame minimum and one concept per request; usage is missing on background polls; Muse's prompt cache hit only with `prompt_cache_key`; SAM masks are slow to decode in Python; the video docs do not say how video is billed or sampled; SAM's results depend heavily on the word ("parcel" finds nothing where "package" finds everything); video drops what scores below 0.7 while an image returns it.
 - [ ] README credits: the Pexels stock clips, and the sim's assets (sim/CREDITS.md).
 - [ ] Before judging: rerun `scripts/prime_samples.py` if a prompt changed.
 
