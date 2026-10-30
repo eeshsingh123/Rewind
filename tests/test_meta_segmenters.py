@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
+from rewind.adapters.meta_files import MetaFiles
 from rewind.adapters.segmenters.meta_api import MetaApi
 from rewind.adapters.segmenters.meta_video import MetaVideoSegmenter
 from rewind.adapters.storage.local_disk import LocalDiskBlobStore
@@ -57,9 +58,12 @@ async def _blobs(tmp_path: Path) -> LocalDiskBlobStore:
     return blobs
 
 
+def _client(replay: Replay) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(replay))
+
+
 def _api(replay: Replay) -> MetaApi:
-    client = httpx.AsyncClient(transport=httpx.MockTransport(replay))
-    return MetaApi(client, "test-key", "https://api.meta.ai/v1")
+    return MetaApi(_client(replay), "test-key", "https://api.meta.ai/v1")
 
 
 def _request(frames: int, prompt: Prompt) -> SegmentRequest:
@@ -77,7 +81,9 @@ async def test_video_concept_maps_frames_to_footage_time_and_bills_reported_usag
     tmp_path: Path,
 ) -> None:
     replay = Replay("t2_01_files_upload.json", "t2_02_video_rectangle_2fps.json")
-    segmenter = MetaVideoSegmenter(_api(replay), await _blobs(tmp_path), file_ttl_s=3600)
+    files = MetaFiles(_client(replay), "test-key", "https://api.meta.ai/v1",
+                      await _blobs(tmp_path), ttl_s=3600)  # fmt: skip
+    segmenter = MetaVideoSegmenter(_api(replay), files)
 
     result = await segmenter.segment(_request(24, ConceptPrompt("rectangle")))
 

@@ -36,6 +36,8 @@ class UserMessage:
     text: str
     # Blob keys of images; the adapter resolves them.
     image_keys: tuple[str, ...] = ()
+    # Blob key of an MP4 the model watches with the text; times it states are into this clip.
+    video_key: str | None = None
     role: Literal["user"] = "user"
 
 

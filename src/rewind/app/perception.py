@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from rewind.adapters.meta_files import MetaFiles
 from rewind.adapters.segmenters.meta_api import MetaApi
 from rewind.adapters.segmenters.meta_image import MetaImageSegmenter
 from rewind.adapters.segmenters.meta_video import MetaVideoSegmenter
@@ -32,6 +33,7 @@ class Perception:
     runner: PerceptionRunner
     observations: ParquetObservationStore
     ledger: Ledger
+    files: MetaFiles
     video_segmenter: MetaVideoSegmenter
     image_segmenter: MetaImageSegmenter
 
@@ -56,7 +58,9 @@ def build_perception(
     blobs = LocalDiskBlobStore(settings.data_root / "blobs", settings.public_base_url, signing_key)
     video_tools = FfmpegVideoTools()
     proxies = ProxyMaker(blobs, video_tools, settings.proxy_max_height)
-    api = MetaApi(client, settings.meta_api_key.get_secret_value(), settings.meta_api_base_url)
+    key = settings.meta_api_key.get_secret_value()
+    api = MetaApi(client, key, settings.meta_api_base_url)
+    files = MetaFiles(client, key, settings.meta_api_base_url, blobs, settings.meta_file_ttl_s)
     limits = BudgetLimits(
         workspace_daily_usd=settings.workspace_daily_cap_usd,
         kill_switch_usd=settings.kill_switch_usd,
@@ -71,6 +75,7 @@ def build_perception(
         runner=PerceptionRunner(proxies, observations),
         observations=observations,
         ledger=Ledger(costs, limits),
-        video_segmenter=MetaVideoSegmenter(api, blobs, settings.meta_file_ttl_s),
+        files=files,
+        video_segmenter=MetaVideoSegmenter(api, files),
         image_segmenter=MetaImageSegmenter(api, blobs),
     )

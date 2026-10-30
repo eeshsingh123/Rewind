@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 import httpx
 from pydantic import BaseModel, Field, JsonValue, ValidationError
 
+from rewind.adapters.meta_files import MetaFiles, MetaFilesError
 from rewind.contracts import Charge
 from rewind.core.ports import (
     AssistantMessage,
@@ -49,7 +50,12 @@ PRICES = {
 
 class MuseLanguageModel:
     def __init__(
-        self, client: httpx.AsyncClient, api_key: str, model: str, images: BlobStore
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        model: str,
+        images: BlobStore,
+        files: MetaFiles | None = None,
     ) -> None:
         if model not in PRICES:
             raise ValueError(f"no prices known for Muse model {model}")
@@ -58,14 +64,17 @@ class MuseLanguageModel:
         self._model = model
         self._prices = PRICES[model]
         self._images = images
+        self._files = files
 
     @property
     def model_version(self) -> str:
         return self._model
 
     async def complete(self, request: CompletionRequest) -> Completion:
+        if any(isinstance(m, UserMessage) and m.video_key for m in request.messages):
+            return await self._watch(request)
         body = await self._body(request)
-        response = await self._post(body)
+        response = await self._post("chat/completions", body)
         try:
             reply = _ChatResponse.model_validate_json(response.content)
         except ValidationError as error:
@@ -137,17 +146,83 @@ class MuseLanguageModel:
             case ToolResultMessage(tool_call_id=call_id, text=text):
                 return {"role": "tool", "tool_call_id": call_id, "content": text}
 
+    # Video is read only through the Responses API, by the file id of an upload.
+    async def _watch(self, request: CompletionRequest) -> Completion:
+        if request.tools:
+            raise LanguageModelError("a request with a video cannot take tools")
+        body: dict[str, JsonValue] = {
+            "model": self._model,
+            "input": [await self._input(message) for message in request.messages],
+            "max_output_tokens": request.max_output_tokens,
+            "reasoning": {"effort": request.effort},
+        }
+        cache_key = _prompt_cache_key(request.messages)
+        if cache_key is not None:
+            body["prompt_cache_key"] = cache_key
+        if request.response_schema is not None:
+            body["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": "reply",
+                    "strict": True,
+                    "schema": dict(request.response_schema),
+                }
+            }
+        response = await self._post("responses", body)
+        try:
+            reply = _Response.model_validate_json(response.content)
+        except ValidationError as error:
+            raise LanguageModelError(f"unexpected Muse response: {error}") from error
+        if reply.status != "completed":
+            raise LanguageModelError(f"Muse response ended as {reply.status}")
+        text = "".join(
+            part.text
+            for item in reply.output
+            if item.type == "message"
+            for part in item.content
+            if part.type == "output_text"
+        )
+        usage = reply.usage
+        cached = usage.input_tokens_details.cached_tokens if usage.input_tokens_details else 0
+        details = usage.output_tokens_details
+        reasoning = details.reasoning_tokens if details else 0
+        charges = self._priced(usage.input_tokens, cached, usage.output_tokens, reasoning)
+        return Completion(text=text, tool_calls=(), charges=charges)
+
+    async def _input(self, message: ChatMessage) -> dict[str, JsonValue]:
+        match message:
+            case SystemMessage(text=text):
+                content: list[JsonValue] = [{"type": "input_text", "text": text}]
+                return {"type": "message", "role": "system", "content": content}
+            case UserMessage(text=text, image_keys=keys, video_key=video_key):
+                content = [{"type": "input_text", "text": text}]
+                for key in keys:
+                    content.append({"type": "input_image", "image_url": await self._image(key)})
+                if video_key:
+                    content.append({"type": "input_video", "file_id": await self._file(video_key)})
+                return {"type": "message", "role": "user", "content": content}
+            case _:
+                raise LanguageModelError("a request with a video takes system and user text only")
+
+    async def _file(self, key: str) -> str:
+        if self._files is None:
+            raise LanguageModelError("this Muse model was built without file uploads")
+        try:
+            return await self._files.file_id(key)
+        except MetaFilesError as error:
+            raise LanguageModelError(str(error)) from error
+
     async def _image(self, key: str) -> str:
         data = await self._images.read(key)
         return f"data:{_image_type(data)};base64,{base64.b64encode(data).decode()}"
 
-    async def _post(self, body: dict[str, JsonValue]) -> httpx.Response:
+    async def _post(self, path: str, body: dict[str, JsonValue]) -> httpx.Response:
         headers = {"Authorization": f"Bearer {self._api_key}"}
         attempt = 0
         while True:
             try:
                 response = await self._client.post(
-                    f"{BASE_URL}/chat/completions",
+                    f"{BASE_URL}/{path}",
                     json=body,
                     headers=headers,
                     timeout=REQUEST_TIMEOUT_S,
@@ -167,11 +242,16 @@ class MuseLanguageModel:
         cached = usage.prompt_tokens_details.cached_tokens if usage.prompt_tokens_details else 0
         details = usage.completion_tokens_details
         reasoning = details.reasoning_tokens if details else 0
-        # Reasoning is included in completion_tokens; split it out so each token counts once.
+        return self._priced(usage.prompt_tokens, cached, usage.completion_tokens, reasoning)
+
+    def _priced(
+        self, prompt: int, cached: int, completion: int, reasoning: int
+    ) -> tuple[Charge, ...]:
+        # Reasoning is included in the output count; split it out so each token counts once.
         quantities = (
-            ("input_token", usage.prompt_tokens - cached, self._prices.input),
+            ("input_token", prompt - cached, self._prices.input),
             ("cached_input_token", cached, self._prices.cached_input),
-            ("output_token", usage.completion_tokens - reasoning, self._prices.output),
+            ("output_token", completion - reasoning, self._prices.output),
             ("reasoning_token", reasoning, self._prices.output),
         )
         return tuple(
@@ -262,6 +342,37 @@ class _Usage(BaseModel):
 class _ChatResponse(BaseModel):
     choices: list[_Choice] = Field(min_length=1)
     usage: _Usage
+
+
+class _OutputText(BaseModel):
+    type: str
+    text: str = ""
+
+
+class _OutputItem(BaseModel):
+    type: str
+    content: list[_OutputText] = []
+
+
+class _InputDetails(BaseModel):
+    cached_tokens: int = 0
+
+
+class _OutputDetails(BaseModel):
+    reasoning_tokens: int = 0
+
+
+class _ResponseUsage(BaseModel):
+    input_tokens: int
+    output_tokens: int
+    input_tokens_details: _InputDetails | None = None
+    output_tokens_details: _OutputDetails | None = None
+
+
+class _Response(BaseModel):
+    status: str
+    output: list[_OutputItem] = []
+    usage: _ResponseUsage
 
 
 class _Error(BaseModel):
