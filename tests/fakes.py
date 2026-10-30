@@ -1,43 +1,24 @@
 import json
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import NamedTuple
 
 import httpx
 
-from rewind.contracts import Attachment, Button, ChannelCapabilities, Charge, Reply
+from rewind.contracts import Box, Charge, Observation, TimeSpan
+from rewind.core.ask import Mark, Tile
+from rewind.core.perception import ActivitySample
 from rewind.core.ports import (
-    ActivityKind,
-    AttachmentTooLargeError,
     Completion,
     CompletionRequest,
+    Segmentation,
+    SegmentRequest,
     ToolCall,
+    VideoInfo,
+    VideoToolsError,
 )
-
-
-class FakeBlobStore:
-    def __init__(self) -> None:
-        self.blobs: dict[str, bytes] = {}
-
-    async def write(self, key: str, data: bytes) -> None:
-        self.blobs[key] = data
-
-    async def write_file(self, key: str, source: Path) -> None:
-        self.blobs[key] = source.read_bytes()
-
-    async def read(self, key: str) -> bytes:
-        return self.blobs[key]
-
-    async def local_path(self, key: str) -> Path:
-        raise NotImplementedError
-
-    async def exists(self, key: str) -> bool:
-        return key in self.blobs
-
-    def signed_url(self, key: str, expires_in_s: int) -> str:
-        return f"https://blobs.test/{key}"
-
 
 RECORDINGS = Path(__file__).parent / "recordings"
 
@@ -59,12 +40,6 @@ def replay(name: str, sent: list[httpx.Request], match: bool = True) -> httpx.As
     return httpx.AsyncClient(transport=httpx.MockTransport(handle))
 
 
-CAPABILITIES = ChannelCapabilities(
-    max_text_chars=4096, max_media_bytes=50_000_000, max_buttons=8,
-    max_image_bytes=10_000_000, can_edit=True,
-)  # fmt: skip
-
-
 def completion(text: str = "", *calls: ToolCall, output_tokens: int = 50) -> Completion:
     spent = Charge(
         provider="meta", model="muse", unit="output_token", quantity=output_tokens,
@@ -84,46 +59,105 @@ class ScriptedModel:
         return self.replies.pop(0) if self.replies else completion("ok")
 
 
-class Shown(NamedTuple):
-    # "send", "progress", "activity" or "fetch".
-    kind: str
-    chat_id: str
-    text: str
-    key: str = ""
+class FakeVideo:
+    def __init__(self) -> None:
+        self.drawn: list[tuple[Mark, ...]] = []
+        self.unreadable = False
 
+    async def probe(self, source: Path) -> VideoInfo:
+        if self.unreadable:
+            raise VideoToolsError("moov atom not found")
+        return VideoInfo(duration_s=10.0, fps=25.0, width=1280, height=720, frame_count=250)
 
-@dataclass
-class FakeChannel:
-    name: str = "telegram"
-    sent: list[Reply] = field(default_factory=list[Reply])
-    # Everything the chat showed, in order.
-    shown: list[Shown] = field(default_factory=list[Shown])
-    fetch_limit: int = 20_000_000
+    async def make_proxy(
+        self, source: Path, destination: Path, spans: Sequence[TimeSpan], fps: float,
+        max_height: int,
+    ) -> tuple[float, ...]:  # fmt: skip
+        destination.write_bytes(b"proxy")
+        return tuple(
+            k / fps
+            for span in spans
+            for k in range(math.ceil(span.start * fps), math.floor(span.end * fps) + 1)
+        )
 
-    @property
-    def capabilities(self) -> ChannelCapabilities:
-        return CAPABILITIES
+    async def cut_clip(self, source: Path, destination: Path, span: TimeSpan) -> None:
+        destination.write_bytes(b"clip")
 
-    async def send(self, reply: Reply) -> None:
-        self.sent.append(reply)
-        self.shown.append(Shown("send", reply.chat_id, reply.text))
+    async def playable(self, source: Path, destination: Path) -> None:
+        destination.write_bytes(b"playable")
 
-    async def show_progress(
-        self, chat_id: str, key: str, text: str, buttons: tuple[Button, ...] = ()
+    async def still(self, source: Path, t: float, destination: Path) -> None:
+        destination.write_bytes(b"still")
+
+    async def make_clip(
+        self, source: Path, destination: Path, span: TimeSpan, marks: Sequence[Mark]
     ) -> None:
-        self.sent.append(Reply(channel=self.name, chat_id=chat_id, text=text, buttons=buttons))
-        self.shown.append(Shown("progress", chat_id, text, key))
+        self.drawn.append(tuple(marks))
+        destination.write_bytes(b"clip with boxes")
 
-    async def show_activity(
-        self, chat_id: str, kind: ActivityKind, message_id: str | None = None
-    ) -> None:
-        self.shown.append(Shown("activity", chat_id, kind))
 
-    async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
-        if (attachment.size_bytes or 0) > self.fetch_limit:
-            raise AttachmentTooLargeError(self.fetch_limit)
-        self.shown.append(Shown("fetch", "", attachment.ref))
-        destination.write_bytes(b"video")
+class FakeActivity:
+    async def sample(self, source: Path, sample_fps: float) -> tuple[ActivitySample, ...]:
+        return tuple(ActivitySample(t=i / 5, score=0.05 if i < 30 else 0.0) for i in range(1, 50))
 
-    def progress(self, key: str) -> list[str]:
-        return [s.text for s in self.shown if s.kind == "progress" and s.key == key]
+
+# Two cartons ride left and leave the view at its left edge at t=3; only the second carries a
+# label. Video tracks the cartons; the label is looked for on stills.
+class FakeSam:
+    model_version = "sam-test"
+    max_frames = 1000
+    max_prompt_objects = 16
+    max_tracked_objects = None
+    min_billed_frames = 1
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.prompts: list[str] = []
+
+    def estimate(self, request: SegmentRequest) -> tuple[Charge, ...]:
+        return (billed_frames(len(request.frame_times)),)
+
+    async def segment(self, request: SegmentRequest) -> Segmentation:
+        self.calls += 1
+        self.prompts.append(getattr(request.prompt, "text", ""))
+        concept = self.prompts[-1]
+        found: list[Observation] = []
+        for t in request.frame_times:
+            if t > 3:
+                continue
+            x = max(0.0, 0.6 - 0.2 * t)
+            if concept == "carton":
+                found += [
+                    seen(request, concept, t, 1, x, 0.1),
+                    seen(request, concept, t, 2, x, 0.6),
+                ]
+            if concept == "shipping label":
+                found.append(seen(request, concept, t, 1, x + 0.1, 0.65, size=0.1))
+        return Segmentation(tuple(found), (billed_frames(len(request.frame_times)),))
+
+
+def billed_frames(count: int) -> Charge:
+    return Charge(
+        provider="meta", model="sam-test", unit="video_frame", quantity=count,
+        usd=Decimal("0.0002") * count,
+    )  # fmt: skip
+
+
+def seen(
+    request: SegmentRequest, concept: str, t: float, object_id: int, x: float, y: float,
+    size: float = 0.3,
+) -> Observation:  # fmt: skip
+    box = Box(x0=x, y0=y, x1=x + size, y1=y + size)
+    return Observation(
+        footage_id=request.footage_id, t=t, concept=concept, box=box, score=0.9,
+        object_id=object_id,
+    )  # fmt: skip
+
+
+class FakeSheet:
+    def __init__(self) -> None:
+        self.tiles: list[tuple[Tile, ...]] = []
+
+    async def make_sheet(self, source: Path, destination: Path, tiles: Sequence[Tile]) -> None:
+        self.tiles.append(tuple(tiles))
+        destination.write_bytes(b"\xff\xd8 jpeg")

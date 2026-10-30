@@ -1,6 +1,6 @@
 # Live smoke run of perception against the real SAM 3.1 API; never run in CI. Usage:
 #   uv run python scripts/smoke_perception.py CLIP --concept "rectangle" [--box T,X0,Y0,X1,Y1]
-# Ingests the clip, plans dense_track, runs the plan twice (the second run must cost $0), and
+# Ingests the clip, tracks each concept on the busy parts twice (the second run must cost $0), and
 # compares the ledger with the usage the provider reported. The budget guard caps the spend.
 
 import argparse
@@ -15,9 +15,8 @@ import httpx
 from rewind.adapters.storage.sql import SqlRepository
 from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
-from rewind.contracts import Box, Entity, ExitsView, RuleSpec
+from rewind.contracts import Box, SamplingPlan, SamplingWindow
 from rewind.core.budget import EPOCH, BudgetScope
-from rewind.core.perception import PlanInput
 from rewind.core.ports import ObjectPrompt, ObjectPrompts, SegmentRequest
 
 SAFE_HEADERS = ("content-type", "date", "x-request-id")
@@ -96,7 +95,7 @@ async def main() -> None:
         perception = build_perception(settings, client, repository)
         original_key = f"footage/{args.clip.name}"
         await perception.blobs.write_file(original_key, args.clip)
-        ingested = await perception.ingest.ingest("smoke", "line-smoke", original_key)
+        ingested = await perception.ingest.ingest("smoke", "smoke", original_key)
         footage = ingested.footage
         print(
             f"footage {footage.duration_s:.1f}s @ {footage.fps:g} fps, "
@@ -105,13 +104,11 @@ async def main() -> None:
         print(f"active spans: {[(s.start, s.end) for s in ingested.active_spans]}")
         print(f"proxy: {footage.proxy}")
 
-        rules = tuple(
-            RuleSpec(entity=Entity(key="item", phrase=concept), checkpoint=ExitsView())
-            for concept in args.concept
+        windows = tuple(
+            SamplingWindow(span=span, fps=args.fps, concepts=tuple(args.concept))
+            for span in ingested.active_spans
         )
-        plan = perception.planner.plan(
-            "dense_track", PlanInput(footage, ingested.active_spans, rules, args.fps)
-        )
+        plan = SamplingPlan(footage_id=footage.id, windows=windows)
         for run in (1, 2):
             started = datetime.now(UTC)
             scope = BudgetScope(workspace_id="smoke", job_id=f"run-{run}-{started:%H%M%S}")

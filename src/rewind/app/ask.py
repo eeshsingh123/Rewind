@@ -9,7 +9,6 @@ from rewind.adapters.video.photo import PillowPhotos
 from rewind.adapters.video.proof_clip import OpenCvProofClips
 from rewind.app.perception import Perception
 from rewind.app.settings import Settings
-from rewind.core.analysis import PartLooker
 from rewind.core.ask import (
     AskAgent,
     AskLimits,
@@ -28,6 +27,7 @@ from rewind.core.budget import (
     BudgetScope,
     TokenPrices,
 )
+from rewind.core.perception import PartLooker
 from rewind.core.ports import LanguageModel, Transcriber
 
 _CONVEYOR = "stock/pexels_5903898_packages_conveyor_720p.mp4"

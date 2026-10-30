@@ -1,17 +1,16 @@
 import itertools
 import math
 import statistics
-from collections import Counter, defaultdict
-from collections.abc import Mapping, Sequence
+from collections import defaultdict
+from collections.abc import Sequence
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from rewind.contracts import TimeSpan, Violation
-from rewind.core.rules import Check
+from rewind.contracts import TimeSpan
 
-# A gap in output counts as a stop when it is this many times the line's usual gap between items,
-# and at least MIN_STOP_S: measured against the line's own pace, so it holds for any line.
+# A gap in output counts as a stop when it is this many times the usual gap between items, and
+# at least MIN_STOP_S: measured against the footage's own pace, so it holds for any scene.
 STOP_FACTOR = 3.0
 MIN_STOP_S = 5.0
 # Below this many items in a row there is no usual gap to compare with.
@@ -26,26 +25,11 @@ MIN_STEPS = 8
 type Path = Sequence[tuple[float, float, float]]
 
 
-class _Frozen(BaseModel):
+class Stop(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class Judged(_Frozen):
-    rule_id: str
-    track_id: str
-    # When the item reached the rule's checkpoint.
-    t: float
-    violation_id: str | None = None
-
-    @property
-    def passed(self) -> bool:
-        return self.violation_id is None
-
-
-class Stop(_Frozen):
     # From the last item out before the gap to the first one after it.
     gap: TimeSpan
-    # The stretch the line was seen standing still: nothing moved in view, or the items in view
+    # The stretch seen standing still: nothing moved in view, or the items in view
     # stood still. A gap with neither may be items the camera check missed, so it is no stop.
     stood: TimeSpan
     seen: Literal["no_motion", "items_still"]
@@ -56,67 +40,20 @@ class Stop(_Frozen):
         return round((self.stood.end - self.stood.start) / self.usual_gap_s)
 
 
-# Every item each rule judged, pass or fail, and the stops: what insights are computed from, kept
-# per recording so questions and later checks can use it without seeing the video again.
-class Timeline(_Frozen):
-    footage_id: str
-    duration_s: float
-    judged: tuple[Judged, ...]
-    stops: tuple[Stop, ...] = ()
-
-    def of_rule(self, rule_id: str) -> tuple[Judged, ...]:
-        return tuple(sorted((j for j in self.judged if j.rule_id == rule_id), key=lambda j: j.t))
-
-    def rule_ids(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(j.rule_id for j in self.judged))
-
-
-def judged_items(
-    rule_id: str, checks: Sequence[Check], violations: Sequence[Violation]
-) -> tuple[Judged, ...]:
-    failed = {v.track_id: v.id for v in violations if v.track_id is not None}
-    return tuple(
-        Judged(rule_id=rule_id, track_id=c.track_id, t=c.t, violation_id=failed.get(c.track_id))
-        for c in checks
-    )
-
-
-# A rerun of some rules keeps what the other rules found in the same recording.
-def merged_timeline(
-    previous: "Timeline | None",
-    footage_id: str,
-    duration_s: float,
-    judged: Mapping[str, tuple[Judged, ...]],
-    active_spans: Sequence[TimeSpan],
-    paths: Sequence[Path],
-) -> Timeline:
-    kept = tuple(j for j in previous.judged if j.rule_id not in judged) if previous else ()
-    every = kept + tuple(j for found in judged.values() for j in found)
-    return Timeline(
-        footage_id=footage_id,
-        duration_s=duration_s,
-        judged=every,
-        stops=find_stops(every, active_spans, duration_s, paths),
-    )
-
-
-# Output is timed by the rule that judged the most items, so each item counts once.
+# times: when each item left, from which the footage's own pace is read.
 def find_stops(
-    judged: Sequence[Judged],
+    times: Sequence[float],
     active_spans: Sequence[TimeSpan],
     duration_s: float,
     paths: Sequence[Path] = (),
 ) -> tuple[Stop, ...]:
-    if not judged:
-        return ()
-    busiest, _ = Counter(j.rule_id for j in judged).most_common(1)[0]
-    times = sorted({round(j.t, 3) for j in judged if j.rule_id == busiest})
-    usual = usual_gap(times)
+    ordered = sorted({round(t, 3) for t in times})
+    usual = usual_gap(ordered)
     if usual is None:
         return ()
     limit = max(MIN_STOP_S, STOP_FACTOR * usual)
     stops: list[Stop] = []
-    for start, end in itertools.pairwise(times):
+    for start, end in itertools.pairwise(ordered):
         if end - start <= limit:
             continue
         gap = TimeSpan(start=start, end=end)
@@ -129,7 +66,7 @@ def find_stops(
     return tuple(stops)
 
 
-# The line's usual time between one item and the next; None with too few items to tell.
+# The usual time between one item and the next; None with too few items to tell.
 def usual_gap(times: Sequence[float]) -> float | None:
     ordered = sorted(set(times))
     if len(ordered) < MIN_ITEMS_FOR_PACE:
@@ -139,7 +76,7 @@ def usual_gap(times: Sequence[float]) -> float | None:
 
 
 # The longest stretch inside the gap where the tracked items moved far slower than they usually
-# do, measured against their own speed on this footage, so it holds for any line and camera.
+# do, measured against their own speed on this footage, so it holds for any scene and camera.
 def _held(gap: TimeSpan, paths: Sequence[Path]) -> TimeSpan | None:
     steps = [(a[0], b[0], math.dist(a[1:], b[1:]) / (b[0] - a[0]))
              for path in paths for a, b in itertools.pairwise(path) if b[0] > a[0]]  # fmt: skip

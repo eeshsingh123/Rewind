@@ -1,6 +1,5 @@
 from rewind.contracts.base import Concept, Contract, Id, Key, Seconds, TimeSpan
 from rewind.contracts.cost import Charge, CostEntry, CostEstimate
-from rewind.contracts.findings import Event, EventKind, Insight, Violation
 from rewind.contracts.geometry import Box, Point, Polygon, RleMask, Shape, Tripwire, ViewExit, Zone
 from rewind.contracts.messaging import (
     Attachment,
@@ -11,23 +10,7 @@ from rewind.contracts.messaging import (
     ReplyMedia,
 )
 from rewind.contracts.perception import Observation, SamplingPlan, SamplingWindow, Track
-from rewind.contracts.records import Footage, Line, Proxy, Rule
-from rewind.contracts.rules import (
-    Before,
-    Checkpoint,
-    CountAtLeast,
-    Dwell,
-    EndOfFootage,
-    EntersZone,
-    Entity,
-    ExitsView,
-    Has,
-    InZone,
-    Predicate,
-    Rate,
-    Requirement,
-    RuleSpec,
-)
+from rewind.contracts.records import Footage, Proxy
 from rewind.contracts.scenario import (
     Camera,
     GroundTruth,
@@ -38,47 +21,28 @@ from rewind.contracts.scenario import (
 
 __all__ = [
     "Attachment",
-    "Before",
     "Box",
     "Button",
     "Camera",
     "CanonicalMessage",
     "ChannelCapabilities",
     "Charge",
-    "Checkpoint",
     "Concept",
     "Contract",
     "CostEntry",
     "CostEstimate",
-    "CountAtLeast",
-    "Dwell",
-    "EndOfFootage",
-    "EntersZone",
-    "Entity",
-    "Event",
-    "EventKind",
-    "ExitsView",
     "Footage",
     "GroundTruth",
     "GroundTruthItem",
-    "Has",
     "Id",
-    "InZone",
-    "Insight",
     "Key",
-    "Line",
     "Observation",
     "Point",
     "Polygon",
-    "Predicate",
     "Proxy",
-    "Rate",
     "Reply",
     "ReplyMedia",
-    "Requirement",
     "RleMask",
-    "Rule",
-    "RuleSpec",
     "SamplingPlan",
     "SamplingWindow",
     "ScenarioConfig",
@@ -89,6 +53,5 @@ __all__ = [
     "Track",
     "Tripwire",
     "ViewExit",
-    "Violation",
     "Zone",
 ]

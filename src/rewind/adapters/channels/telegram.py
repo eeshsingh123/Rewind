@@ -225,10 +225,6 @@ class TelegramChannel:
         return _result(method, response)
 
 
-def parse_update(raw: dict[str, Any]) -> CanonicalMessage | None:
-    return _canonical(_Update.model_validate(raw))
-
-
 def _canonical(update: _Update) -> CanonicalMessage | None:
     query = update.callback_query
     if query is not None:

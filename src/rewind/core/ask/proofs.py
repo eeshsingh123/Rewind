@@ -5,12 +5,13 @@ from pathlib import Path
 from typing import Protocol
 
 from rewind.contracts import Footage, TimeSpan
-from rewind.core.analysis import ClipMaker, Mark, ProofMarks
-from rewind.core.analysis.facts import MAX_CLIP_S
 from rewind.core.ask.evidence import Evidence
+from rewind.core.ask.marks import ClipMaker, Mark, ProofMarks
 from rewind.core.ask.session import Session
 from rewind.core.ports import BlobStore, VideoTools
 
+# A clip longer than this would be too big for a chat; a longer stretch shows its start.
+MAX_CLIP_S = 20.0
 MIN_CLIP_S = 3.0
 
 

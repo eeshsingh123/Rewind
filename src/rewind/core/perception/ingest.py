@@ -1,19 +1,13 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from rewind.contracts import Footage, TimeSpan, Zone
-from rewind.core.perception.activity import (
-    ActivityProbe,
-    IdleSkip,
-    active_spans,
-    watched_regions,
-)
+from rewind.contracts import Footage, TimeSpan
+from rewind.core.perception.activity import ActivityProbe, IdleSkip, active_spans
 from rewind.core.perception.proxy import ProxyMaker
 from rewind.core.ports import BlobStore, VideoTools
 
@@ -23,7 +17,7 @@ _SPANS = TypeAdapter(tuple[TimeSpan, ...])
 @dataclass(frozen=True, slots=True)
 class Ingested:
     footage: Footage
-    # Where something moves inside the zones; only these spans are ever sent to a paid model.
+    # Where something moves; only these spans are ever sent to a paid model.
     active_spans: tuple[TimeSpan, ...]
 
 
@@ -44,13 +38,11 @@ class Ingest:
         self._proxy_fps = proxy_fps
         self._idle_skip = idle_skip or IdleSkip()
 
-    async def ingest(
-        self, footage_id: str, line_id: str, original_key: str, zones: Sequence[Zone] = ()
-    ) -> Ingested:
+    async def ingest(self, footage_id: str, line_id: str, original_key: str) -> Ingested:
         source = await self._blobs.local_path(original_key)
         content_hash = await asyncio.to_thread(_sha256, source)
         info = await self._video.probe(source)
-        spans = await self._active_spans(source, content_hash, info.duration_s, zones)
+        spans = await self._active_spans(source, content_hash, info.duration_s)
         proxy = None
         if spans:
             clip = await self._proxies.ensure(content_hash, original_key, spans, self._proxy_fps)
@@ -70,14 +62,12 @@ class Ingest:
         return Ingested(footage=footage, active_spans=spans)
 
     async def _active_spans(
-        self, source: Path, content_hash: str, duration_s: float, zones: Sequence[Zone]
+        self, source: Path, content_hash: str, duration_s: float
     ) -> tuple[TimeSpan, ...]:
-        regions = watched_regions(zones)
-        digest = hashlib.sha256(repr(regions).encode()).hexdigest()[:12]
-        key = f"activity/{content_hash}-{digest}.json"
+        key = f"activity/{content_hash}.json"
         if await self._blobs.exists(key):
             return _SPANS.validate_json(await self._blobs.read(key))
-        samples = await self._activity.sample(source, self._idle_skip.sample_fps, regions)
+        samples = await self._activity.sample(source, self._idle_skip.sample_fps)
         spans = active_spans(samples, duration_s, self._idle_skip)
         await self._blobs.write(key, json.dumps([span.model_dump() for span in spans]).encode())
         return spans

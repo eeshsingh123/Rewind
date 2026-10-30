@@ -17,8 +17,8 @@ from rewind.adapters.storage.sql import SqlRepository
 from rewind.app.ask import build_ask
 from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
-from rewind.core.analysis import clock_time
 from rewind.core.ask import Step
+from rewind.core.ask.words import clock_time
 from rewind.core.budget import EPOCH, BudgetScope
 
 

@@ -8,10 +8,9 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from rewind.contracts import Box, Charge, Footage, TimeSpan
-from rewind.core.analysis import still_key
 from rewind.core.ask.evidence import Kind
 from rewind.core.ask.watch import FirstLook, Watcher
-from rewind.core.perception import Ingest
+from rewind.core.perception import Ingest, still_key
 from rewind.core.ports import BlobStore, LanguageModel, VideoTools
 
 # Told what is happening, in plain words, as it happens.

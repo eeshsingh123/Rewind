@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rewind.contracts import TimeSpan
-from rewind.core.analysis.facts import Fact, untraceable
-from rewind.core.analysis.proof import Mark
+from rewind.core.ask.marks import Mark
 
 # "measured": code counted or timed it from tracks. "seen": Muse judged it from video or crops.
 type Kind = Literal["measured", "seen"]
@@ -13,6 +12,12 @@ type Kind = Literal["measured", "seen"]
 MIN_WORDS = 3
 MAX_CLAIM_CHARS = 300
 _EVIDENCE_ID = re.compile(r"\be\d+\b")
+_NUMBER = re.compile(r"\d+(?:[:.]\d+)*")
+_WORDS = {
+    "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7",
+    "eight": "8", "nine": "9", "ten": "10", "eleven": "11", "twelve": "12",
+}  # fmt: skip
+_WORD = re.compile(r"\b(" + "|".join(_WORDS) + r")\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +78,7 @@ class Notebook:
         backing = tuple(self._entries[i] for i in dict.fromkeys(cited) if i in self._entries)
         if unknown or not backing:
             return f"Cite evidence ids from the list (unknown: {', '.join(unknown) or 'none'})."
-        missing = untraceable(text, [Fact(e.id, e.text) for e in backing])
+        missing = untraceable(text, [e.text for e in backing])
         if missing:
             return (
                 f"These numbers or times are not in the evidence cited: {', '.join(missing)}. "
@@ -81,3 +86,25 @@ class Notebook:
             )
         kind: Kind = "measured" if all(e.kind == "measured" for e in backing) else "seen"
         return Claim(text, kind, backing)
+
+
+# Numbers and times a sentence states that its sources do not: a claim code cannot trace.
+def untraceable(text: str, sources: Sequence[str]) -> tuple[str, ...]:
+    known = {_canonical(n) for source in sources for n in _NUMBER.findall(source)}
+    spoken = _WORD.sub(lambda m: _WORDS[m.group(1).lower()], text)
+    stated = [n for n in _NUMBER.findall(spoken) if _canonical(n) not in {"0", "1"}]
+    return tuple(dict.fromkeys(n for n in stated if _canonical(n) not in known))
+
+
+def _canonical(number: str) -> str:
+    if ":" in number:
+        seconds = 0
+        for part in number.split(":"):
+            if not part.isdigit():
+                return number
+            seconds = seconds * 60 + int(part)
+        return f"t{seconds}"
+    try:
+        return f"{float(number):g}"
+    except ValueError:
+        return number

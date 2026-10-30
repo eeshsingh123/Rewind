@@ -37,10 +37,3 @@ def naive_tracks(
             )
         )
     return tuple(tracks)
-
-
-# "carton#12" reads as "carton 12": the 12th carton to appear in that recording.
-def item_label(track_id: str | None) -> str:
-    if track_id is None:
-        return "the line"
-    return track_id.replace("#", " ")

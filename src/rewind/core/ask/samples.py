@@ -2,8 +2,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from rewind.core.analysis import StillGrabber
 from rewind.core.ask.session import PhotoReader, is_photo
+from rewind.core.perception import StillGrabber
 from rewind.core.ports import BlobStore
 
 # Past any fade-in at the start of a clip.

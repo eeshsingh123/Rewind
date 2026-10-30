@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from rewind.core.analysis.facts import Tile
+from rewind.core.ask import Tile
 from rewind.core.ports import VideoToolsError
 
 # BGR, as in the proof clips.
@@ -40,7 +40,7 @@ def _sheet(source: Path, destination: Path, tiles: tuple[Tile, ...]) -> None:
         row, column = divmod(index, _COLUMNS)
         sheet[row * height : (row + 1) * height, column * width : (column + 1) * width] = image
     if not cv2.imwrite(str(destination), sheet, [cv2.IMWRITE_JPEG_QUALITY, 85]):
-        raise VideoToolsError("could not write the insight picture")
+        raise VideoToolsError("could not write the contact sheet")
 
 
 def _frames(source: Path, tiles: tuple[Tile, ...]) -> list[np.ndarray]:
