@@ -13,6 +13,7 @@ from rewind.core.ask import (
     AskAgent,
     AskLimits,
     Proofs,
+    Reader,
     Runs,
     Sample,
     Samples,
@@ -94,7 +95,7 @@ def build_ask(settings: Settings, client: httpx.AsyncClient, perception: Percept
     proofs = Proofs(blobs, perception.video_tools, OpenCvProofClips())
     return Ask(
         sessions=sessions,
-        agent=AskAgent(sessions, tools, proofs, AskLimits()),
+        agent=AskAgent(sessions, tools, proofs, Reader(blobs, stills), AskLimits()),
         samples=Samples(sample_footage(settings), blobs, perception.video_tools, photos),
         perception=perception,
         muse=muse,

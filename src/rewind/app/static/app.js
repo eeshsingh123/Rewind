@@ -2,6 +2,8 @@
 
 const POLL_MS = 600;
 const MIN_BOX = 0.01;
+const PAST_KEY = "rewind.sessions";
+const MAX_PAST = 30;
 
 const $ = (id) => document.getElementById(id);
 
@@ -54,6 +56,46 @@ function show(which) {
 function openHome() {
   show("home");
   loadSamples();
+  loadPast();
+}
+
+// Kept in this browser, so the page never lists anyone else's footage.
+function pastIds() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(PAST_KEY));
+    return Array.isArray(ids) ? ids : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberSession(id) {
+  try {
+    const ids = [id, ...pastIds().filter((known) => known !== id)];
+    localStorage.setItem(PAST_KEY, JSON.stringify(ids.slice(0, MAX_PAST)));
+  } catch {
+    // Storage is blocked: the list stays empty and everything else still works.
+  }
+}
+
+async function loadPast() {
+  const replies = await Promise.all(pastIds().map((id) => fetch(`/api/sessions/${id}`)));
+  const found = await Promise.all(replies.filter((reply) => reply.ok).map((reply) => reply.json()));
+  const asked = found.filter((session) => session.exchanges.length);
+  $("past").hidden = asked.length === 0;
+  $("past-list").replaceChildren(...asked.map(pastSession));
+}
+
+function pastSession(session) {
+  return el(
+    "a",
+    { className: "past", href: `/s/${session.id}` },
+    el("p", { className: "past-about", textContent: session.summary }),
+    ...session.exchanges.flatMap((exchange) => [
+      el("p", { className: "past-asked", textContent: exchange.question }),
+      el("p", { className: "past-answer", textContent: exchange.answer }),
+    ]),
+  );
 }
 
 async function loadSamples() {
@@ -119,6 +161,7 @@ function go(id) {
 
 async function openSession(id) {
   state.id = id;
+  rememberSession(id);
   show("desk");
   await refresh();
   await follow();
@@ -312,11 +355,13 @@ function showExchange(exchange) {
       el("details", {}, el("summary", { textContent: `${count} step${count > 1 ? "s" : ""}` }), steps),
     );
   }
+  if (exchange.reading) turn.append(el("p", { className: "reading", textContent: exchange.reading }));
   if (exchange.findings.length) {
     exchange.findings.forEach((finding) => turn.append(showFinding(finding)));
   } else {
     turn.append(el("p", { textContent: exchange.answer }));
   }
+  if (exchange.left_out) turn.append(el("p", { className: "cost", textContent: exchange.left_out }));
   turn.append(el("p", { className: "cost", textContent: costLine(exchange.cost_usd) }));
   $("log").append(turn);
 }
@@ -334,6 +379,7 @@ function showFinding(finding) {
     addTick(finding.start_s, finding.end_s, finding.text, "found");
   }
   meta.append(finding.kind === "measured" ? "Measured by code" : "Seen by Muse");
+  if (finding.clip_cut) meta.append(" · the clip shows the first 20 s");
   return el(
     "div",
     { className: "finding" },
@@ -369,7 +415,9 @@ function costLine(cost) {
 
 function showSuggested() {
   const asked = new Set(state.session.exchanges.map((exchange) => exchange.question));
-  const left = state.session.questions.filter((question) => !asked.has(question));
+  const back = state.session.exchanges.at(-1)?.choices ?? [];
+  const pool = back.length ? back : state.session.questions;
+  const left = pool.filter((question) => !asked.has(question));
   $("suggested").replaceChildren(
     ...left.map((question) =>
       el("button", {

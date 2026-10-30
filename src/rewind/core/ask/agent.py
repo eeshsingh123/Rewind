@@ -9,10 +9,19 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rewind.contracts import Charge, CostEstimate, TimeSpan
 from rewind.core.ask.areas import Area
 from rewind.core.ask.evidence import Claim, Notebook
-from rewind.core.ask.proofs import Proofs
+from rewind.core.ask.proofs import MAX_CLIP_S, Proofs
+from rewind.core.ask.reading import Reader, Reading
 from rewind.core.ask.session import Exchange, Finding, Marked, OnStep, Session, Sessions, Step
-from rewind.core.ask.tools import MARKED_THING, AskTool, Bench, Segmenters, Started, ToolError
-from rewind.core.ask.words import clock_time
+from rewind.core.ask.tools import (
+    MARKED_THING,
+    AskTool,
+    Bench,
+    Segmenters,
+    Started,
+    ToolError,
+    note_moment,
+)
+from rewind.core.ask.words import clock_time, plural
 from rewind.core.ports import (
     AssistantMessage,
     ChatMessage,
@@ -33,7 +42,7 @@ logger = logging.getLogger(__name__)
 ANSWER = "answer"
 MARKED_PART = "the part you marked"
 _OUTPUT_UNITS = frozenset({"output_token", "reasoning_token"})
-_ANSWER_VERSION = "2"
+_ANSWER_VERSION = "7"
 NOTHING_BACKED = "I couldn't back an answer to that with what I found."
 NUDGE = "Give your answer by calling answer, citing the evidence ids behind each sentence."
 
@@ -45,6 +54,7 @@ see the {media} yourself: you use tools, and each tool result is evidence with a
 question is about separate items. It costs the most; call it once per thing.
 - look: a close look at each item of a found thing, or at a whole {frame} or an area, with one \
 question for each ("Does it have a label?"). Use it to judge items one by one.
+- combine: code turns the answers look gave into the exact list and count of matching items.
 - measure: {measure}
 {follow}- area: marks one named part of the {frame} ("the left half"){when}, so find, look and \
 measure can work on that part alone by naming it. Use it when a question is about one part of \
@@ -52,12 +62,23 @@ the {frame}. If the area cannot be made out, say so plainly and do not guess whe
 - answer: your reply, as claims.
 
 The first look below is a quick pass over the whole {media}: use it to know where to look, and \
-confirm claims about single items with find and look before stating them. Plan a few steps, \
-then answer. Do not call a tool again with the same arguments.
+confirm claims about single items with find and look before stating them. A question about \
+items ("do the boxes have labels?") is answered item by item: find them, look at every one with \
+the same question, and name the ones that differ. Never say something holds for all items from \
+watch or the first look, or for a stretch of time because a few frames showed it. If you checked \
+only some items, say so. When the question was read as having several conditions, look once per \
+condition, word for word, then call combine: once per condition for separate lists, or once with \
+all or any when the reading says so. Take counts from combine, and name items in a claim by their \
+time alone. How many of a thing means how many different ones there were in all: lead with the \
+number find, measure or combine gives, and give counts at single moments only when asked for \
+them. When the reading names a part of the frame, mark it with area first. Plan a few steps, \
+then answer. Do not call a tool again with the same \
+arguments.
 
 Answer with answer. Each claim is one short plain sentence for a manager, not an engineer: \
 {places}, items named as tools named them, no ids, no tool names. Each claim cites the \
-evidence ids that back it, and states numbers and times only as that evidence writes them. Lead \
+evidence ids that back it, at least one of them an item, a frame or a moment that can be shown, \
+and states numbers and times only as that evidence writes them. Lead \
 with the direct answer. When the evidence cannot answer something, say so plainly in a claim \
 citing what you looked at. Use as few claims as answer the question. Write every claim in the \
 language of the question, with numbers always in digits, never spelled out."""
@@ -121,9 +142,11 @@ class AskAgent:
         sessions: Sessions,
         tools: tuple[AskTool, ...],
         proofs: Proofs,
+        reader: Reader,
         limits: AskLimits,
     ) -> None:
         self._sessions = sessions
+        self._reader = reader
         self._tools = {tool.name: tool for tool in tools}
         self._proofs = proofs
         self._limits = limits
@@ -148,12 +171,20 @@ class AskAgent:
             for step in exchange.steps:
                 await on_step(Step(text=step, done=True))
             exchange = exchange.model_copy(update={"question": question, "cost_usd": Decimal(0)})
+            things: tuple[str, ...] = ()
         else:
-            exchange = await self._work_out(session, question, model, segmenters, on_step, marked)
+            exchange, things = await self._work_out(
+                session, question, model, segmenters, on_step, marked
+            )
             if exchange.findings:
                 await self._sessions.remember(digest, exchange)
         await self._sessions.save(
-            session.model_copy(update={"exchanges": (*session.exchanges, exchange)})
+            session.model_copy(
+                update={
+                    "exchanges": (*session.exchanges, exchange),
+                    "things": tuple(dict.fromkeys((*session.things, *things))),
+                }
+            )
         )
         return exchange
 
@@ -165,19 +196,7 @@ class AskAgent:
         segmenters: Segmenters,
         on_step: OnStep,
         marked: Marked | None,
-    ) -> Exchange:
-        notebook = Notebook()
-        bench = Bench(session, model, segmenters, notebook, marked=marked)
-        if marked is not None:
-            bench.areas[MARKED_PART] = Area(MARKED_PART, marked.box, marked.t)
-        follow = FOLLOW_WORDS if marked is not None and not session.photo else ""
-        words = PHOTO_WORDS if session.photo else VIDEO_WORDS
-        instructions = INSTRUCTIONS.format(**words, follow=follow)
-        state = _state(session, bench)
-        messages: list[ChatMessage] = [SystemMessage(instructions), SystemMessage(state)]
-        for exchange in session.exchanges:
-            messages += [UserMessage(exchange.question), AssistantMessage(exchange.answer)]
-        messages.append(UserMessage(question))
+    ) -> tuple[Exchange, tuple[str, ...]]:
         steps: list[str] = []
 
         async def noted(step: Step) -> None:
@@ -185,8 +204,35 @@ class AskAgent:
                 steps.append(step.text)
             await on_step(step)
 
+        notebook = Notebook()
+        bench = Bench(session, model, segmenters, notebook, marked=marked, on_step=noted)
+        reading = await self._read(bench, question, noted)
+        if reading is not None and reading.unclear and _may_ask_back(session):
+            cost = CostEstimate(charges=tuple(bench.charges)).total_usd
+            asked_back = Exchange(
+                question=question,
+                answer=reading.unclear,
+                choices=reading.choices,
+                cost_usd=cost,
+                marked=marked,
+            )
+            return asked_back, ()
+        if marked is not None:
+            bench.areas[MARKED_PART] = Area(MARKED_PART, marked.box, marked.t)
+        follow = FOLLOW_WORDS if marked is not None and not session.photo else ""
+        words = PHOTO_WORDS if session.photo else VIDEO_WORDS
+        instructions = INSTRUCTIONS.format(**words, follow=follow)
+        state = _state(session, bench)
+        if session.things:
+            state += f"\nAlready found, free to use again: {', '.join(session.things)}."
+        if reading is not None:
+            state += f"\n{reading.brief}"
+        messages: list[ChatMessage] = [SystemMessage(instructions), SystemMessage(state)]
+        for exchange in session.exchanges:
+            messages += [UserMessage(exchange.question), AssistantMessage(exchange.answer)]
+        messages.append(UserMessage(question))
         run = _Run(self._limits, bench)
-        claims = await self._loop(bench, messages, run, noted)
+        claims = await self._loop(bench, messages, run, noted) or notebook.worked_out()
         if claims:
             await on_step(Step(text="Drawing the proof", done=False))
         findings: list[Finding] = []
@@ -194,15 +240,35 @@ class AskAgent:
             shown = claim.shown
             proof = await self._proofs.render(session, shown) if shown else None
             span = None if session.photo or shown is None else shown.clip
-            findings.append(Finding(text=claim.text, kind=claim.kind, proof_key=proof, span=span))
-        return Exchange(
+            cut = span is not None and span.end - span.start > MAX_CLIP_S
+            findings.append(
+                Finding(text=claim.text, kind=claim.kind, proof_key=proof, span=span, clip_cut=cut)
+            )
+        exchange = Exchange(
             question=question,
             answer="\n".join(f.text for f in findings) or NOTHING_BACKED,
             findings=tuple(findings),
             steps=tuple(steps),
             cost_usd=run.spent,
             marked=marked,
+            reading=reading.plain if reading is not None else "",
+            left_out=_left_out(run.left_out) if findings else "",
         )
+        return exchange, tuple(bench.found)
+
+    # A reading that fails costs the person nothing: the agent still answers the words as asked.
+    async def _read(self, bench: Bench, question: str, on_step: OnStep) -> Reading | None:
+        await on_step(Step(text="Reading your question", done=False))
+        try:
+            reading = await self._reader.read(
+                bench.session, question, bench.marked, bench.model, bench.charges
+            )
+        except (LanguageModelError, VideoToolsError):
+            logger.exception("could not read the question")
+            return None
+        if reading.plain and not reading.unclear:
+            await on_step(Step(text=reading.plain, done=True))
+        return reading
 
     async def _loop(
         self, bench: Bench, messages: list[ChatMessage], run: "_Run", on_step: OnStep
@@ -223,6 +289,7 @@ class AskAgent:
             run.think(completion.charges)
             if not completion.tool_calls:
                 if nudged:
+                    logger.warning("the agent did not call answer: %s", completion.text[:300])
                     return kept
                 nudged = True
                 messages += [AssistantMessage(completion.text), UserMessage(NUDGE)]
@@ -231,6 +298,7 @@ class AskAgent:
             for call in completion.tool_calls:
                 if call.name == ANSWER:
                     claims, problems = _claims(bench.notebook, call.arguments)
+                    run.left_out = len(problems)
                     if not problems or run.answered:
                         return claims
                     run.answered, kept = True, claims
@@ -280,6 +348,8 @@ class _Run:
         # The agent's own output only: tools have their own limits per call.
         self.tokens_left = limits.max_output_tokens
         self.answered = False
+        # Claims of the latest answer that the check would not keep.
+        self.left_out = 0
 
     @property
     def spent(self) -> Decimal:
@@ -293,6 +363,17 @@ class _Run:
         return (
             self.tool_calls < self._limits.max_tool_calls and self.spent < self._limits.budget_usd
         )
+
+
+def _left_out(count: int) -> str:
+    if count == 0:
+        return ""
+    return f"Left out {count} more {plural('point', count)} I could not back with proof."
+
+
+# Once is enough: an answer to a question back is taken as it stands.
+def _may_ask_back(session: Session) -> bool:
+    return not (session.exchanges and session.exchanges[-1].choices)
 
 
 def _usable(tool: AskTool, bench: Bench) -> bool:
@@ -320,6 +401,7 @@ def _claims(notebook: Notebook, raw: str) -> tuple[tuple[Claim, ...], list[str]]
     try:
         arguments = _AnswerArguments.model_validate_json(raw or "{}")
     except ValidationError as error:
+        logger.warning("answer was not valid: %s", error)
         return (), [f"invalid arguments for answer: {error}"]
     kept: list[Claim] = []
     problems: list[str] = []
@@ -354,9 +436,7 @@ def _state(session: Session, bench: Bench) -> str:
         notebook.add("seen", f"In the whole video: {look.summary}").line,
     ]
     for moment in look.moments:
-        clip = moment.span
-        text = f"{clock_time(clip.start)} to {clock_time(clip.end)}: {moment.what}"
-        lines.append(notebook.add("seen", text, clip).line)
+        lines.append(note_moment(notebook, moment, footage.duration_s, moment.span).line)
     return "\n".join([*lines, *_marked_lines(bench)])
 
 

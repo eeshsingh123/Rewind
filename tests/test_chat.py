@@ -306,7 +306,7 @@ async def test_footage_first_look_tap_and_answer_with_proof(tmp_path: Path, chan
         completion(json.dumps(FIRST_LOOK)),
         *_answering({"text": NO_LABEL, "evidence": ["e4"]}),
         completion("", _call("answer", {"claims": [{"text": "Nothing else stands out here.",
-                                                    "evidence": ["e1"]}]})),
+                                                    "evidence": ["e2"]}]})),
     ])  # fmt: skip
     async with desk(tmp_path, channel, model) as run:
         await run.send("video_message" if channel == "whatsapp" else "video")
@@ -363,9 +363,10 @@ async def test_a_photo_with_a_caption_is_answered_with_a_picture(
         completion(json.dumps(PHOTO_LOOK)),
         completion("", _call("find", {"thing": "box"})),
         completion("", _call("look", {"question": "Is there a label on top?", "thing": "box"})),
-        completion(json.dumps({"tiles": [{"tile": "1", "answer": "has a label"},
-                                         {"tile": "2", "answer": "no label"},
-                                         {"tile": "3", "answer": "has a label"}]})),
+        completion(json.dumps({"tiles": [{"tile": "1", "verdict": "yes", "answer": "has"},
+                                         {"tile": "2", "verdict": "no", "answer": "no label"},
+                                         {"tile": "3", "verdict": "yes",
+                                          "answer": "has a label"}]})),
         completion("", _call("answer", {"claims": [{"text": no_label, "evidence": ["e5"]}]})),
     ])  # fmt: skip
     async with desk(tmp_path, channel, model, sam=FakeImageSam()) as run:

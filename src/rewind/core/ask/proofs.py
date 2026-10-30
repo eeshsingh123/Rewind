@@ -30,6 +30,8 @@ class Proofs:
         self._maker = maker
 
     async def render(self, session: Session, evidence: Evidence) -> str | None:
+        if evidence.proof_key is not None:
+            return evidence.proof_key
         if evidence.clip is None:
             return None
         if session.photo:
