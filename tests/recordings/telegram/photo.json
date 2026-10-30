@@ -1,0 +1,36 @@
+{
+  "update_id": 500,
+  "message": {
+    "message_id": 11,
+    "from": {
+      "id": 7,
+      "is_bot": false,
+      "first_name": "Owner",
+      "username": "owner"
+    },
+    "chat": {
+      "id": 42,
+      "type": "private",
+      "first_name": "Owner",
+      "username": "owner"
+    },
+    "date": 1793000000,
+    "photo": [
+      {
+        "file_id": "tg-small",
+        "file_unique_id": "u3",
+        "width": 90,
+        "height": 60,
+        "file_size": 1000
+      },
+      {
+        "file_id": "tg-large",
+        "file_unique_id": "u4",
+        "width": 1280,
+        "height": 853,
+        "file_size": 90000
+      }
+    ],
+    "caption": "Does each box have a label on top?"
+  }
+}

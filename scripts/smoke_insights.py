@@ -28,8 +28,9 @@ from rewind.core.rules import RuleCompiler, normalize
 
 CHAT_MAX_BYTES = 16 * 1024 * 1024
 CAPABILITIES = ChannelCapabilities(
-    max_text_chars=4096, max_media_bytes=CHAT_MAX_BYTES, max_buttons=8
-)
+    max_text_chars=4096, max_media_bytes=CHAT_MAX_BYTES, max_buttons=8,
+    max_image_bytes=CHAT_MAX_BYTES, can_edit=True,
+)  # fmt: skip
 
 
 class PrintingNotifier:

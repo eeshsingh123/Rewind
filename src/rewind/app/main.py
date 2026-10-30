@@ -7,15 +7,19 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import APIRouter, FastAPI
 
-from rewind.adapters.channels.whatsapp import WEBHOOK_PATH, register_webhook, webhook_router
+from rewind.adapters.channels.whatsapp import (
+    WEBHOOK_PATH,
+    register_webhook,
+    subscribe_account,
+    webhook_router,
+)
 from rewind.adapters.storage.sql import SqlRepository
 from rewind.app.ask import build_ask
 from rewind.app.chat import Chat, build_chat
 from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
-from rewind.app.upload import upload_router
 from rewind.app.web import mount_page, web_router
-from rewind.core.conversation import MENU
+from rewind.core.ask import MENU
 from rewind.core.ports import ChannelError
 
 logger = logging.getLogger(__name__)
@@ -45,9 +49,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings.data_root.mkdir(parents=True, exist_ok=True)
     repository = SqlRepository.from_url(settings.database_url_or_default)
     perception = build_perception(settings, client, repository)
-    chat = build_chat(settings, client, repository, perception)
     ask = build_ask(settings, client, perception)
     runs = ask.runs()
+    chat = build_chat(settings, client, repository, ask, runs)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -68,7 +72,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Rewind", lifespan=lifespan)
     app.state.settings = settings
     app.include_router(router)
-    app.include_router(upload_router(chat.conversation))
     app.include_router(web_router(runs, ask.sessions, ask.samples, perception.blobs))
     mount_page(app)
     if chat.whatsapp is not None:
@@ -97,7 +100,7 @@ def _start_channels(
     app_secret, verify_token = settings.whatsapp_app_secret, settings.whatsapp_verify_token
     if chat.whatsapp is not None and settings.whatsapp_app_id and app_secret and verify_token:
         registration = _register_whatsapp(
-            client, settings.public_base_url, settings.whatsapp_app_id,
+            client, settings, settings.whatsapp_app_id,
             app_secret.get_secret_value(), verify_token.get_secret_value(),
         )  # fmt: skip
         tasks.append(asyncio.create_task(registration))
@@ -117,9 +120,9 @@ async def _set_telegram_commands(chat: Chat) -> None:
 # Meta checks the callback with a GET while registering, so this waits until the tunnel
 # reaches this server.
 async def _register_whatsapp(
-    client: httpx.AsyncClient, base_url: str, app_id: str, app_secret: str, verify_token: str
+    client: httpx.AsyncClient, settings: Settings, app_id: str, app_secret: str, verify_token: str
 ) -> None:
-    base = base_url.rstrip("/")
+    base = settings.public_base_url.rstrip("/")
     for _ in range(_TUNNEL_WAIT_S):
         try:
             if (await client.get(f"{base}/health", timeout=5)).is_success:
@@ -127,8 +130,11 @@ async def _register_whatsapp(
         except httpx.HTTPError:
             pass
         await asyncio.sleep(1)
+    token, account_id = settings.whatsapp_token, settings.whatsapp_business_account_id
     try:
         await register_webhook(client, app_id, app_secret, f"{base}{WEBHOOK_PATH}", verify_token)
+        if token is not None and account_id:
+            await subscribe_account(client, token.get_secret_value(), account_id)
     except ChannelError:
         logger.exception("WhatsApp webhook registration failed")
         return

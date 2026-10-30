@@ -1,6 +1,7 @@
 from rewind.core.budget.guarded import (
     BudgetedLanguageModel,
     BudgetedSegmenter,
+    BudgetedTranscriber,
     BudgetScope,
     TokenPrices,
     estimate_completion_usd,
@@ -22,6 +23,7 @@ __all__ = [
     "BudgetScope",
     "BudgetedLanguageModel",
     "BudgetedSegmenter",
+    "BudgetedTranscriber",
     "CostRecords",
     "Ledger",
     "TokenPrices",

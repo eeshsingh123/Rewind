@@ -3,7 +3,7 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -18,10 +18,37 @@ from rewind.core.ports import BlobStore, LanguageModel, VideoTools
 type OnStep = Callable[["Step"], Awaitable[None]]
 
 _PHOTO_TYPES = frozenset({".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".avif", ".bmp"})
+_VIDEO_TYPES = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".3gp"})
+_SUFFIXES = {"image/heic": ".heic", "image/heif": ".heif", "video/quicktime": ".mov"}
 
 
 def is_photo(name: str) -> bool:
     return PurePosixPath(name).suffix.lower() in _PHOTO_TYPES
+
+
+# The name decides between photo and video; a phone may send none, or one with no extension.
+def footage_suffix(filename: str | None, mime_type: str | None) -> str:
+    suffix = PurePosixPath(filename or "").suffix.lower()
+    if suffix.isascii() and suffix[1:].isalnum():
+        return suffix
+    kind = mime_type or ""
+    if kind in _SUFFIXES:
+        return _SUFFIXES[kind]
+    return ".jpg" if kind.startswith("image/") else ".mp4"
+
+
+# What a chat file is, for the channels. Phones often send a photo or video as a plain file, and
+# a HEIC or a .mov can arrive with no useful type at all.
+def attachment_kind(
+    mime_type: str | None, filename: str | None
+) -> Literal["video", "image", "audio", "file"]:
+    kind = mime_type or ""
+    suffix = PurePosixPath(filename or "").suffix.lower()
+    if kind.startswith("image/") or suffix in _PHOTO_TYPES:
+        return "image"
+    if kind.startswith("video/") or suffix in _VIDEO_TYPES:
+        return "video"
+    return "audio" if kind.startswith("audio/") else "file"
 
 
 class PhotoReader(Protocol):

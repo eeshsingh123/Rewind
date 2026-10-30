@@ -63,7 +63,9 @@ class Notebook:
     # A claim is kept only when it cites known evidence and states no number or time beyond it.
     def check(self, text: str, cited: Sequence[str]) -> Claim | str:
         text = " ".join(text.split())
-        if len(text.split()) < MIN_WORDS or len(text) > MAX_CLAIM_CHARS:
+        # Word counts only mean something in scripts that put spaces between words.
+        short = text.isascii() and len(text.split()) < MIN_WORDS
+        if short or len(text) > MAX_CLAIM_CHARS:
             return f"Write a plain sentence of at most {MAX_CLAIM_CHARS} characters."
         if _EVIDENCE_ID.search(text):
             return "Do not write evidence ids in the sentence."

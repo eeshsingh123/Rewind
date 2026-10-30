@@ -6,7 +6,7 @@ from rewind.contracts.base import Contract, Id, Key
 
 
 class Attachment(Contract):
-    kind: Literal["video", "image", "file"]
+    kind: Literal["video", "image", "audio", "file"]
     # Provider-specific handle; only the channel that received it can fetch it.
     ref: Id
     mime_type: str | None = None
@@ -54,3 +54,6 @@ class ChannelCapabilities(Contract):
     # 0 means the channel cannot send media, or cannot show buttons.
     max_media_bytes: int = Field(ge=0)
     max_buttons: int = Field(ge=0)
+    max_image_bytes: int = Field(ge=0)
+    # Whether a sent message can be changed later, so progress can stay one message.
+    can_edit: bool

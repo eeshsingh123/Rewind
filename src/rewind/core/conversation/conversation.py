@@ -12,15 +12,10 @@ from pathlib import Path
 
 from rewind.contracts import Attachment, CanonicalMessage, Reply
 from rewind.core.analysis import INGEST_JOB
+from rewind.core.ask.chat import ACTIVITY_EVERY_S, Activity
 from rewind.core.budget import BudgetExceededError
 from rewind.core.conversation.agent import Agent, AgentReply
-from rewind.core.conversation.channel import (
-    ACK_AFTER_S,
-    ACTIVITY_EVERY_S,
-    Ack,
-    Activity,
-    ChatChannel,
-)
+from rewind.core.conversation.channel import ACK_AFTER_S, Ack
 from rewind.core.conversation.prompt import workspace_state
 from rewind.core.conversation.readings import Reading, Readings
 from rewind.core.conversation.store import ChatRef, ConversationStore, HistoryEntry
@@ -32,8 +27,10 @@ from rewind.core.conversation.workspace_tools import (
     resolve_line,
 )
 from rewind.core.ports import (
+    AttachmentTooLargeError,
     BlobStore,
     ChannelError,
+    ChatChannel,
     JobPayload,
     JobRunner,
     LanguageModel,
@@ -43,7 +40,6 @@ from rewind.core.ports import (
 
 logger = logging.getLogger(__name__)
 
-TURN_JOB = "turn"
 LINK_TOKEN = "link"
 HISTORY_TURNS = 20
 NOT_ALLOWED = "Sorry, this assistant is private."
@@ -58,14 +54,6 @@ TOOL_STATUS = {
 }
 
 Command = Callable[[TurnContext, str], Awaitable[AgentReply]]
-
-
-class AttachmentTooLargeError(ChannelError):
-    """Raised by a channel when the provider will not hand over a file this big."""
-
-    def __init__(self, limit_bytes: int) -> None:
-        super().__init__(f"the channel can fetch files up to {limit_bytes} bytes")
-        self.limit_bytes = limit_bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,19 +73,6 @@ class Received:
     note: str
     # What the person was told about it, already sent.
     said: str
-
-
-class Inbox:
-    def __init__(self, repository: Repository, jobs: JobRunner) -> None:
-        self._repository = repository
-        self._jobs = jobs
-
-    # A provider retry of the same message is dropped here, before any work is queued.
-    async def receive(self, message: CanonicalMessage) -> bool:
-        if not await self._repository.claim_message(message.channel, message.message_id):
-            return False
-        await self._jobs.submit(TURN_JOB, {"message": message.model_dump(mode="json")})
-        return True
 
 
 class Conversation:

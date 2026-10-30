@@ -1,3 +1,4 @@
+from rewind.core.ask.chat import TURN_JOB, Inbox
 from rewind.core.conversation.agent import Agent, AgentReply, TurnLimits
 from rewind.core.conversation.analysis_tools import (
     Analyze,
@@ -8,19 +9,14 @@ from rewind.core.conversation.analysis_tools import (
 )
 from rewind.core.conversation.channel import (
     Ack,
-    ActivityKind,
-    ChatChannel,
     Outbox,
     with_activity,
 )
 from rewind.core.conversation.conversation import (
     INGEST_JOB,
-    TURN_JOB,
-    AttachmentTooLargeError,
     Command,
     Conversation,
     ConversationSettings,
-    Inbox,
 )
 from rewind.core.conversation.guide import MENU, guide_commands
 from rewind.core.conversation.prompt import INSTRUCTIONS
@@ -47,6 +43,7 @@ from rewind.core.conversation.workspace_tools import (
     resolve_line,
     upload_link,
 )
+from rewind.core.ports import ActivityKind, AttachmentTooLargeError, ChatChannel
 
 __all__ = [
     "INGEST_JOB",

@@ -24,8 +24,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from rewind.contracts import CostEntry, Event, Footage, Insight, Line, Rule, Violation
-from rewind.core.conversation import ChatRef, HistoryEntry
-from rewind.core.ports import RepositoryError
+from rewind.core.conversation import HistoryEntry
+from rewind.core.ports import ChatRef, RepositoryError
 
 metadata = MetaData()
 
@@ -63,6 +63,13 @@ chats_table = Table(
     Column("channel", String, primary_key=True),
     Column("chat_id", String, primary_key=True),
     Column("workspace_id", String, nullable=False, index=True),
+)
+chat_sessions_table = Table(
+    "chat_sessions",
+    metadata,
+    Column("channel", String, primary_key=True),
+    Column("chat_id", String, primary_key=True),
+    Column("session_id", String, nullable=False),
 )
 tokens_table = Table(
     "tokens",
@@ -201,6 +208,25 @@ class SqlRepository:
             .values(channel=chat.channel, chat_id=chat.chat_id, workspace_id=workspace_id)
             .on_conflict_do_update(
                 index_elements=["channel", "chat_id"], set_={"workspace_id": workspace_id}
+            )
+        )
+        async with self._begin() as connection:
+            await connection.execute(statement)
+
+    async def latest_session(self, chat: ChatRef) -> str | None:
+        statement = select(chat_sessions_table.c.session_id).where(
+            chat_sessions_table.c.channel == chat.channel,
+            chat_sessions_table.c.chat_id == chat.chat_id,
+        )
+        async with self._begin() as connection:
+            return (await connection.execute(statement)).scalar_one_or_none()
+
+    async def set_latest_session(self, chat: ChatRef, session_id: str) -> None:
+        statement = (
+            self._insert(chat_sessions_table)
+            .values(channel=chat.channel, chat_id=chat.chat_id, session_id=session_id)
+            .on_conflict_do_update(
+                index_elements=["channel", "chat_id"], set_={"session_id": session_id}
             )
         )
         async with self._begin() as connection:

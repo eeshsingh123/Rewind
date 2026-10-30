@@ -6,24 +6,29 @@ import re
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rewind.contracts import Attachment, Button, CanonicalMessage, ChannelCapabilities, Reply
-from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
-from rewind.core.ports import BlobStore, ChannelError
+from rewind.core.ask import attachment_kind
+from rewind.core.ports import ActivityKind, AttachmentTooLargeError, BlobStore, ChannelError
 
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.telegram.org"
-# Bot API limits: getFile serves up to 20 MB; bots send up to 50 MB; callback data is 64 bytes.
+# Bot API limits: getFile serves up to 20 MB; bots send videos up to 50 MB and photos up to 10 MB;
+# callback data is 64 bytes.
 FETCH_LIMIT_BYTES = 20 * 1024 * 1024
 CAPABILITIES = ChannelCapabilities(
-    max_text_chars=4096, max_media_bytes=50 * 1024 * 1024, max_buttons=8
+    max_text_chars=4096,
+    max_media_bytes=50 * 1024 * 1024,
+    max_buttons=8,
+    max_image_bytes=10 * 1024 * 1024,
+    can_edit=True,
 )
-# Telegram cuts a video caption off at this many characters; a longer one goes as text after it.
+# Telegram cuts a caption off at this many characters; a longer one goes as text after it.
 CAPTION_LIMIT = 1024
 POLL_TIMEOUT_S = 50
 RETRY_AFTER_ERROR_S = 5
@@ -57,6 +62,11 @@ class _Message(_Model):
     text: str | None = None
     caption: str | None = None
     video: _File | None = None
+    video_note: _File | None = None
+    # Telegram's sizes of one photo, smallest first.
+    photo: tuple[_File, ...] = ()
+    voice: _File | None = None
+    audio: _File | None = None
     document: _File | None = None
 
 
@@ -102,10 +112,13 @@ class TelegramChannel:
                 caption = ""
             fields: dict[str, Any] = {"chat_id": reply.chat_id, "caption": _html(caption),
                                       "parse_mode": "HTML"}  # fmt: skip
-            # With no text after it, the last video carries the buttons: one message, not two.
+            # With no text after it, the last proof carries the buttons: one message, not two.
             if markup is not None and not text and index == len(reply.media) - 1:
                 fields["reply_markup"] = json.dumps(markup)
-            await self._call_with_file("sendVideo", fields, "video", path)
+            if media.kind == "image":
+                await self._call_with_file("sendPhoto", fields, "photo", path, "image/jpeg")
+            else:
+                await self._call_with_file("sendVideo", fields, "video", path, "video/mp4")
         if text:
             await self._call("sendMessage", _text_body(reply.chat_id, _html(text), markup))
 
@@ -131,7 +144,9 @@ class TelegramChannel:
         listed = [{"command": name, "description": text} for name, text in commands]
         await self._call("setMyCommands", {"commands": listed})
 
-    async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
+    async def show_activity(
+        self, chat_id: str, kind: ActivityKind, message_id: str | None = None
+    ) -> None:
         await self._call("sendChatAction", {"chat_id": chat_id, "action": kind})
 
     async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
@@ -180,20 +195,12 @@ class TelegramChannel:
         except ValidationError:
             logger.warning("skipped a telegram update of an unknown shape")
             return
+        # Buttons stay after a tap: the other suggested questions can still be asked.
         if update.callback_query is not None:
-            await self._acknowledge(update.callback_query)
+            await self._call("answerCallbackQuery", {"callback_query_id": update.callback_query.id})
         message = _canonical(update)
         if message is not None:
             await receive(message)
-
-    async def _acknowledge(self, query: _CallbackQuery) -> None:
-        await self._call("answerCallbackQuery", {"callback_query_id": query.id})
-        if query.message is not None:
-            # The buttons go once pressed, so a confirm cannot be pressed twice.
-            await self._call(
-                "editMessageReplyMarkup",
-                {"chat_id": query.message.chat.id, "message_id": query.message.message_id},
-            )
 
     async def _call(self, method: str, body: dict[str, Any], timeout: float = 30) -> Any:
         try:
@@ -203,14 +210,14 @@ class TelegramChannel:
         return _result(method, response)
 
     async def _call_with_file(
-        self, method: str, fields: dict[str, Any], field: str, path: Path
+        self, method: str, fields: dict[str, Any], field: str, path: Path, mime_type: str
     ) -> Any:
         try:
             with path.open("rb") as file:
                 response = await self._client.post(
                     f"{self._base}/{method}",
                     data={k: str(v) for k, v in fields.items()},
-                    files={field: (path.name, file, "video/mp4")},
+                    files={field: (path.name, file, mime_type)},
                     timeout=300,
                 )
         except httpx.HTTPError as error:
@@ -235,7 +242,8 @@ def _canonical(update: _Update) -> CanonicalMessage | None:
     message = update.message
     if message is None or message.sender is None:
         return None
-    attachments = tuple(_attachment(f, kind) for f, kind in _files(message))
+    found = _found(message)
+    attachments = () if found is None else (found,)
     text = message.text or message.caption
     if not text and not attachments:
         return None
@@ -246,20 +254,28 @@ def _canonical(update: _Update) -> CanonicalMessage | None:
     )  # fmt: skip
 
 
-def _files(message: _Message) -> list[tuple[_File, str]]:
-    found: list[tuple[_File, str]] = []
+def _found(message: _Message) -> Attachment | None:
+    if message.photo:
+        return _attachment(message.photo[-1], "image", "image/jpeg")
     if message.video is not None:
-        found.append((message.video, "video"))
+        return _attachment(message.video, "video", "video/mp4")
+    if message.video_note is not None:
+        return _attachment(message.video_note, "video", "video/mp4")
+    sound = message.voice or message.audio
+    if sound is not None:
+        return _attachment(sound, "audio", "audio/ogg")
     if message.document is not None:
-        is_video = (message.document.mime_type or "").startswith("video/")
-        found.append((message.document, "video" if is_video else "file"))
-    return found
+        file = message.document
+        return _attachment(file, attachment_kind(file.mime_type, file.file_name), None)
+    return None
 
 
-def _attachment(file: _File, kind: str) -> Attachment:
+def _attachment(
+    file: _File, kind: Literal["video", "image", "audio", "file"], usual_type: str | None
+) -> Attachment:
     return Attachment(
-        kind="video" if kind == "video" else "file", ref=file.file_id,
-        mime_type=file.mime_type, size_bytes=file.file_size, filename=file.file_name,
+        kind=kind, ref=file.file_id, mime_type=file.mime_type or usual_type,
+        size_bytes=file.file_size, filename=file.file_name,
     )  # fmt: skip
 
 

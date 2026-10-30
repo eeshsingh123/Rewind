@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 ANSWER = "answer"
 MARKED_PART = "the part you marked"
 _OUTPUT_UNITS = frozenset({"output_token", "reasoning_token"})
-_ANSWER_VERSION = "1"
+_ANSWER_VERSION = "2"
 NOTHING_BACKED = "I couldn't back an answer to that with what I found."
 NUDGE = "Give your answer by calling answer, citing the evidence ids behind each sentence."
 
@@ -59,7 +59,8 @@ Answer with answer. Each claim is one short plain sentence for a manager, not an
 {places}, items named as tools named them, no ids, no tool names. Each claim cites the \
 evidence ids that back it, and states numbers and times only as that evidence writes them. Lead \
 with the direct answer. When the evidence cannot answer something, say so plainly in a claim \
-citing what you looked at. Use as few claims as answer the question."""
+citing what you looked at. Use as few claims as answer the question. Write every claim in the \
+language of the question, with numbers always in digits, never spelled out."""
 VIDEO_WORDS = {
     "media": "video",
     "frame": "frame",

@@ -49,10 +49,15 @@ class FakeMedia(FakeVideo):
     def __init__(self) -> None:
         super().__init__()
         self.photos: list[tuple[Mark, ...]] = []
+        self.converted = 0
 
     async def upright(self, source: Path, destination: Path) -> tuple[int, int]:
         destination.write_bytes(b"\xff\xd8 upright")
         return 1200, 800
+
+    async def speech(self, source: Path, destination: Path) -> None:
+        self.converted += 1
+        destination.write_bytes(b"\0" * 96_000)
 
     async def make_photo(self, source: Path, destination: Path, marks: Sequence[Mark]) -> None:
         self.photos.append(tuple(marks))
