@@ -26,6 +26,11 @@ WATCHING = (
     "the start of the clip you are sent. Say only what you can see or hear; when something "
     "cannot be told from the video, say so."
 )
+LOOKING = (
+    "You look at a photo for someone in charge of the place it shows: a line manager, a shop "
+    "owner, a site lead. Write plain, short sentences. Say only what you can see; when something "
+    "cannot be told from the photo, say so."
+)
 FIRST_LOOK = (
     "Watch all of this {length:.1f} s video.\n"
     "summary: two plain sentences on what it shows.\n"
@@ -33,6 +38,14 @@ FIRST_LOOK = (
     "or looking wrong, anything unusual), each with its start and end in seconds.\n"
     "questions: 3 to 5 short questions the person in charge would ask about this video and "
     "that the video can answer."
+)
+PHOTO_FIRST_LOOK = (
+    "Look at all of this photo.\n"
+    "summary: two plain sentences on what it shows.\n"
+    "notes: every notable thing (an item missing a part or looking wrong, a gap, anything "
+    "unusual), each one plain sentence that says where it is in the photo.\n"
+    "questions: 3 to 5 short questions the person in charge would ask about this photo and "
+    "that the photo can answer."
 )
 WATCH = (
     "This clip is {length:.1f} s long. Question: {question}\n"
@@ -60,6 +73,16 @@ FIRST_LOOK_SCHEMA: dict[str, JsonValue] = {
     "properties": {
         "summary": {"type": "string"},
         "moments": _MOMENTS,
+        "questions": {"type": "array", "items": {"type": "string"}},
+    },
+}
+PHOTO_FIRST_LOOK_SCHEMA: dict[str, JsonValue] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["summary", "notes", "questions"],
+    "properties": {
+        "summary": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}},
         "questions": {"type": "array", "items": {"type": "string"}},
     },
 }
@@ -104,6 +127,12 @@ class _RawFirstLook(BaseModel):
     questions: list[str]
 
 
+class _RawPhotoLook(BaseModel):
+    summary: str
+    notes: list[str]
+    questions: list[str]
+
+
 class _RawWatched(BaseModel):
     answer: str
     moments: list[_RawMoment]
@@ -127,7 +156,22 @@ class Watcher:
         look = FirstLook(
             summary=raw.summary.strip(),
             moments=_moments(raw.moments, span),
-            questions=tuple(q.strip() for q in raw.questions if q.strip())[:5],
+            questions=_questions(raw.questions),
+        )
+        return look, charges
+
+    # A photo has no times, so its notes are moments at its only instant.
+    async def first_look_at_photo(
+        self, footage: Footage, model: LanguageModel
+    ) -> tuple[FirstLook, tuple[Charge, ...]]:
+        raw, charges = await self._ask(
+            footage, None, PHOTO_FIRST_LOOK, PHOTO_FIRST_LOOK_SCHEMA, _RawPhotoLook, model
+        )
+        instant = TimeSpan(start=0, end=0)
+        look = FirstLook(
+            summary=raw.summary.strip(),
+            moments=tuple(Moment(span=instant, what=n.strip()) for n in raw.notes if n.strip()),
+            questions=_questions(raw.questions),
         )
         return look, charges
 
@@ -141,26 +185,29 @@ class Watcher:
     async def _ask[T: BaseModel](
         self,
         footage: Footage,
-        span: TimeSpan,
+        # None is the whole of a photo.
+        span: TimeSpan | None,
         prompt: str,
         schema: Mapping[str, JsonValue],
         reply: type[T],
         model: LanguageModel,
     ) -> tuple[T, tuple[Charge, ...]]:
-        inputs = [footage.content_hash, span.start, span.end, prompt, model.model_version,
+        start, end = (span.start, span.end) if span else (None, None)
+        inputs = [footage.content_hash, start, end, prompt, model.model_version,
                   _PROMPT_VERSION]  # fmt: skip
         key = f"ask/watched/{hashlib.sha256(json.dumps(inputs).encode()).hexdigest()[:24]}.txt"
         if await self._blobs.exists(key):
             return _parse(reply, (await self._blobs.read(key)).decode()), ()
-        clip = await self._proxies.ensure(
-            footage.content_hash, footage.original_key, [span], WATCH_FPS
-        )
+        if span is None:
+            system, seen = LOOKING, UserMessage(prompt, image_keys=(footage.original_key,))
+        else:
+            clip = await self._proxies.ensure(
+                footage.content_hash, footage.original_key, [span], WATCH_FPS
+            )
+            system, seen = WATCHING, UserMessage(prompt, video_key=clip.proxy.blob_key)
         completion = await model.complete(
             CompletionRequest(
-                messages=(
-                    SystemMessage(WATCHING),
-                    UserMessage(prompt, video_key=clip.proxy.blob_key),
-                ),
+                messages=(SystemMessage(system), seen),
                 max_output_tokens=MAX_OUTPUT_TOKENS,
                 response_schema=schema,
                 effort="low",
@@ -176,6 +223,10 @@ def _parse[T: BaseModel](model: type[T], text: str) -> T:
         return model.model_validate_json(text)
     except ValidationError as error:
         raise LanguageModelError(f"Muse's look did not fit its schema: {error}") from error
+
+
+def _questions(raw: list[str]) -> tuple[str, ...]:
+    return tuple(q.strip() for q in raw if q.strip())[:5]
 
 
 def _moments(raw: list[_RawMoment], span: TimeSpan) -> tuple[Moment, ...]:

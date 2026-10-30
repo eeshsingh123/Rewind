@@ -17,6 +17,11 @@ from rewind.core.ports import BlobStore, ConceptPrompt, Segmenter, SegmentReques
 from rewind.core.rules import Check
 
 
+# Where the still of one frame is kept. A photo is stored here too, as its own first frame.
+def still_key(footage_id: str, frame: int) -> str:
+    return f"stills/{footage_id}/{frame}.jpg"
+
+
 class StillGrabber(Protocol):
     async def still(self, source: Path, t: float, destination: Path) -> None:
         """Writes the frame at footage time t as a JPEG."""
@@ -94,16 +99,20 @@ class PartLooker:
             await self._store.save(key, CachedFrames(frames=frames))
         return PartLooks(tuple(observations), tuple(charges))
 
-    async def _segment(
-        self, footage: Footage, concept: str, t: float, segmenter: Segmenter
-    ) -> tuple[tuple[Observation, ...], Sequence[Charge]]:
-        image_key = f"stills/{footage.id}/{frame_index(t, footage.fps)}.jpg"
+    async def still(self, footage: Footage, t: float) -> str:
+        image_key = still_key(footage.id, frame_index(t, footage.fps))
         if not await self._blobs.exists(image_key):
             source = await self._blobs.local_path(footage.original_key)
             with tempfile.TemporaryDirectory() as workdir:
                 destination = Path(workdir) / "still.jpg"
                 await self._stills.still(source, t, destination)
                 await self._blobs.write_file(image_key, destination)
+        return image_key
+
+    async def _segment(
+        self, footage: Footage, concept: str, t: float, segmenter: Segmenter
+    ) -> tuple[tuple[Observation, ...], Sequence[Charge]]:
+        image_key = await self.still(footage, t)
         request = SegmentRequest(
             footage.id, image_key, footage.width, footage.height, (t,), ConceptPrompt(concept)
         )

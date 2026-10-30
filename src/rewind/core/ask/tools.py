@@ -10,6 +10,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from rewind.contracts import (
+    Box,
     Charge,
     Footage,
     Observation,
@@ -18,10 +19,19 @@ from rewind.contracts import (
     TimeSpan,
     Track,
 )
-from rewind.core.analysis import SheetMaker, Sighting, Tile, clock_time, join_words, naive_tracks
+from rewind.core.analysis import (
+    PartLooker,
+    SheetMaker,
+    Sighting,
+    Tile,
+    clock_time,
+    join_words,
+    naive_tracks,
+)
 from rewind.core.analysis.proof import Mark
 from rewind.core.analysis.replies import plural
 from rewind.core.analysis.timeline import Judged, find_stops, usual_gap
+from rewind.core.ask.areas import Area, AreaMarker, short_tag
 from rewind.core.ask.evidence import Evidence, Notebook
 from rewind.core.ask.session import Session
 from rewind.core.ask.watch import Watcher
@@ -44,10 +54,10 @@ TILES_PER_SHEET = 9
 MAX_LOOK_ITEMS = 45
 # Items listed by name in a result; the count always covers all of them.
 MAX_LISTED = 40
-_LOOK_PROMPT_VERSION = "1"
+_LOOK_PROMPT_VERSION = "2"
 
 LOOKING = (
-    "You look closely at numbered tiles cut from video footage. Answer each tile from that "
+    "You look closely at numbered tiles cut from a photo or a video. Answer each tile from that "
     "tile only, in a few plain words. Say 'cannot tell' when the tile does not show it."
 )
 LOOK = "{boxed}Question for each tile: {question}"
@@ -75,10 +85,17 @@ class ToolError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Item:
-    # "the jar at 00:14": when it is seen largest, which is where its proof clip looks.
+    # When it is seen largest, which is where its proof looks; on a photo, where it is.
     label: str
     track: Track
     best: Observation
+
+
+# Video tracks items over time; image looks at one frame, a photo or a frame to mark an area on.
+@dataclass(frozen=True, slots=True)
+class Segmenters:
+    video: Segmenter
+    image: Segmenter
 
 
 # What one question has found so far.
@@ -86,15 +103,20 @@ class Item:
 class Bench:
     session: Session
     model: LanguageModel
-    segmenter: Segmenter
+    segmenters: Segmenters
     notebook: Notebook
     found: dict[str, tuple[Item, ...]] = field(default_factory=dict[str, tuple[Item, ...]])
+    areas: dict[str, Area] = field(default_factory=dict[str, Area])
     # Every paid call of the question, recorded as it is made, so a failed step still counts.
     charges: list[Charge] = field(default_factory=list[Charge])
 
     @property
     def footage(self) -> Footage:
         return self.session.footage
+
+    @property
+    def media(self) -> str:
+        return "photo" if self.session.photo else "video"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +142,10 @@ class AskTool(Protocol):
     @property
     def name(self) -> str: ...
 
+    # Not offered on a photo.
+    @property
+    def video_only(self) -> bool: ...
+
     def as_tool(self) -> Tool: ...
 
     def start(self, raw_arguments: str) -> Started | str:
@@ -138,6 +164,7 @@ class ToolSpec[A: Arguments]:
     arguments: type[A]
     doing: Callable[[A], str]
     run: Callable[[Bench, A], Awaitable[Outcome]]
+    video_only: bool = False
 
     def as_tool(self) -> Tool:
         return Tool(self.name, self.description, self.arguments.model_json_schema())
@@ -162,8 +189,9 @@ class WatchArguments(Arguments):
 
 class FindArguments(Arguments):
     thing: str = Field(
-        min_length=1, description="One kind of thing as a short noun phrase: 'jar', 'person'."
+        min_length=1, description="One kind of thing as a short noun phrase: 'chair', 'person'."
     )
+    area: str | None = Field(None, description="Only in this area, named as area named it.")
 
 
 class LookArguments(Arguments):
@@ -174,11 +202,26 @@ class LookArguments(Arguments):
     items: list[str] | None = Field(
         None, description="Only these items, named as found; omit for every item of the thing."
     )
-    times: list[float] | None = Field(None, description="Or look at the whole frame at these.")
+    times: list[float] | None = Field(
+        None, description="Or look at the whole frame at these times; a photo needs none."
+    )
+    area: str | None = Field(
+        None,
+        description="Only in this area, named as area named it. Without a thing, look at the "
+        "area itself.",
+    )
 
 
 class MeasureArguments(Arguments):
     thing: str = Field(min_length=1, description="The thing to count and time (runs find).")
+    area: str | None = Field(None, description="Only in this area, named as area named it.")
+
+
+class AreaArguments(Arguments):
+    name: str = Field(
+        min_length=1, description="The part of the frame, in plain words: 'the left half'."
+    )
+    at_s: float | None = Field(None, description="The time of the frame; a photo needs none.")
 
 
 class Toolset:
@@ -187,12 +230,15 @@ class Toolset:
         blobs: BlobStore,
         watcher: Watcher,
         runner: PerceptionRunner,
+        stills: PartLooker,
         sheets: SheetMaker,
         track_fps: float,
     ) -> None:
         self._blobs = blobs
         self._watcher = watcher
         self._runner = runner
+        self._stills = stills
+        self._marker = AreaMarker(blobs, stills)
         self._sheets = sheets
         self._track_fps = track_fps
 
@@ -205,11 +251,13 @@ class Toolset:
                 WatchArguments,
                 _watching,
                 self.watch,
+                video_only=True,
             ),
             ToolSpec(
                 "find",
-                "SAM finds and tracks every item of one kind of thing through the video and "
-                "names each one by when it is seen best. Costs more than the others.",
+                "SAM finds every item of one kind of thing, in a photo or through a video, and "
+                "names each one: by where it is on a photo, by when it is seen best in a video. "
+                "Costs more than the others.",
                 FindArguments,
                 lambda a: f"Finding every {a.thing}",
                 self.find,
@@ -217,18 +265,26 @@ class Toolset:
             ToolSpec(
                 "look",
                 "Muse looks closely at each item of a found thing, boxed on its best frame, or "
-                "at whole frames, and answers the same question for each one.",
+                "at a whole frame or area, and answers the same question for each one.",
                 LookArguments,
                 lambda a: f"Looking closer: {a.question}",
                 self.look,
             ),
             ToolSpec(
                 "measure",
-                "Code counts the items of a thing and times them: the usual gap between one "
-                "and the next, stops in the flow, and how long each one was in view.",
+                "Code counts the items of a thing. In a video it also times them: the usual gap "
+                "between one and the next, stops in the flow, and how long each was in view.",
                 MeasureArguments,
-                lambda a: f"Measuring the {plural(a.thing, 2)}",
+                lambda a: f"Counting the {plural(a.thing, 2)}",
                 self.measure,
+            ),
+            ToolSpec(
+                "area",
+                "Marks one named part of the frame, so find, look and measure can work on that "
+                "part alone. Muse marks it and SAM confirms it; if they cannot, it says so.",
+                AreaArguments,
+                lambda a: f"Finding {_thing(a.name)}",
+                self.area,
             ),
         )
 
@@ -255,31 +311,38 @@ class Toolset:
 
     async def find(self, bench: Bench, arguments: FindArguments) -> Outcome:
         thing = _thing(arguments.thing)
-        items = await self.items(bench, thing)
+        area = _area(bench, arguments.area)
+        items = _within(await self.items(bench, thing), area)
+        place = _in(area)
+        clip, marks = _count_proof(bench, items, area)
         if not items:
-            evidence = bench.notebook.add("measured", f"No {thing} was found.")
-            return Outcome((evidence,), f"Found no {thing}")
+            evidence = bench.notebook.add("measured", f"No {thing} was found{place}.", clip, marks)
+            return Outcome((evidence,), f"Found no {thing}{place}")
         count = f"{len(items)} {plural(thing, len(items))}"
-        evidence = bench.notebook.add("measured", f"{count} found: {_listed(items)}.")
-        return Outcome((evidence,), f"Found {count}")
+        text = f"{count} found{place}: {_listed(items)}."
+        evidence = bench.notebook.add("measured", text, clip, marks)
+        return Outcome((evidence,), f"Found {count}{place}")
 
     async def look(self, bench: Bench, arguments: LookArguments) -> Outcome:
         footage = bench.footage
+        area = _area(bench, arguments.area)
         subjects: list[tuple[str, Tile, Item | None]] = []
         if arguments.thing:
             thing = _thing(arguments.thing)
-            items = await self.items(bench, thing)
+            items = _within(await self.items(bench, thing), area)
             chosen = _chosen(items, arguments.items)
             subjects = [(i.label, Tile(i.best.t, i.best.box, ""), i) for i in chosen]
             what = f"{len(chosen)} {plural(thing, len(chosen))}"
             boxed = f"Each tile shows one {thing} boxed in red; answer about that {thing}.\n"
-        elif arguments.times:
-            times = sorted({min(max(t, 0.0), footage.duration_s) for t in arguments.times})
-            subjects = [(f"the frame at {clock_time(t)}", Tile(t, None, ""), None) for t in times]
-            what = f"{len(times)} {plural('frame', len(times))}"
-            boxed = ""
         else:
-            raise ToolError("give the thing whose items to look at, or the times of frames")
+            times = sorted(_look_times(bench, arguments.times, area))
+            box = area.box if area else None
+            subjects = [(_frame_name(bench, t, area), Tile(t, box, ""), None) for t in times]
+            whole = "the photo" if bench.session.photo else f"{len(times)} frames"
+            what = area.name if area else whole
+            boxed = ""
+            if area:
+                boxed = f"Each tile shows {area.name} boxed in red; answer about inside the box.\n"
         if not subjects:
             raise ToolError("there is nothing to look at; find the thing first")
         if len(subjects) > MAX_LOOK_ITEMS:
@@ -293,24 +356,34 @@ class Toolset:
             for (label, tile, item), shown in zip(batch, tiles, strict=True):
                 answer = answers.get(shown.label, "cannot tell")
                 clip = _around(TimeSpan(start=tile.t, end=tile.t), footage.duration_s)
-                marks = () if item is None else (_mark(item, clip, answer),)
+                marks = (
+                    *_area_marks(area),
+                    *(() if item is None else (_mark(item, clip, answer),)),
+                )
                 text = f"{label[0].upper()}{label[1:]}: {answer}"
                 evidence.append(bench.notebook.add("seen", text, clip, marks))
         return Outcome(tuple(evidence), f"Looked closer at {what}")
 
     async def measure(self, bench: Bench, arguments: MeasureArguments) -> Outcome:
         thing = _thing(arguments.thing)
-        items = await self.items(bench, thing)
+        area = _area(bench, arguments.area)
+        items = _within(await self.items(bench, thing), area)
         notebook = bench.notebook
+        place = _in(area)
+        clip, marks = _count_proof(bench, items, area)
         if not items:
-            evidence = notebook.add("measured", f"No {thing} was found to measure.")
-            return Outcome((evidence,), f"Found no {thing}")
+            text = f"No {thing} was found to measure{place}."
+            return Outcome((notebook.add("measured", text, clip, marks),), f"Found no {thing}")
+        count = f"{len(items)} {plural(thing, len(items))}"
+        place = place or f" in the {bench.media}"
+        if bench.session.photo:
+            evidence = notebook.add("measured", f"{count}{place}.", clip, marks)
+            return Outcome((evidence,), f"Counted {count}{place}")
         footage = bench.footage
         ends = [item.track.observations[-1].t for item in items]
         usual = usual_gap(ends)
-        count = f"{len(items)} {plural(thing, len(items))}"
         pace = f"; usually {usual:.1f} s from one {thing} leaving to the next" if usual else ""
-        evidence = [notebook.add("measured", f"{count} in the video{pace}.")]
+        evidence = [notebook.add("measured", f"{count}{place}{pace}.", clip, marks)]
         judged = [Judged(rule_id="measure", track_id=i.label, t=t)
                   for i, t in zip(items, ends, strict=True)]  # fmt: skip
         paths = [[(o.t, (o.box.x0 + o.box.x1) / 2, (o.box.y0 + o.box.y1) / 2)
@@ -336,11 +409,50 @@ class Toolset:
         stops_text = f"{len(stops)} {plural('stop', len(stops))}"
         return Outcome(tuple(evidence), f"Measured {count}: {stops_text}")
 
-    # SAM tracks the thing once over the stretches where something moves; the observation cache
-    # makes asking again free.
+    async def area(self, bench: Bench, arguments: AreaArguments) -> Outcome:
+        name = _thing(arguments.name)
+        footage = bench.footage
+        if bench.session.photo:
+            t, frame = 0.0, "the photo"
+        elif arguments.at_s is None:
+            raise ToolError("give the time of the frame to mark the area on")
+        else:
+            t = min(max(arguments.at_s, 0.0), footage.duration_s)
+            frame = f"the frame at {clock_time(t)}"
+        area = await self._marker.mark(
+            footage, name, t, bench.model, bench.segmenters.image, bench.charges
+        )
+        if area is None:
+            evidence = bench.notebook.add("seen", f"Could not make out {name} on {frame}.")
+            return Outcome((evidence,), f"Could not make out {name}")
+        bench.areas[name] = area
+        clip = _around(TimeSpan(start=t, end=t), footage.duration_s)
+        text = f"{name[0].upper()}{name[1:]} is marked on {frame}."
+        evidence = bench.notebook.add("seen", text, clip, (area.mark,))
+        return Outcome((evidence,), f"Marked {name}")
+
     async def items(self, bench: Bench, thing: str) -> tuple[Item, ...]:
         if thing in bench.found:
             return bench.found[thing]
+        look = self._on_photo if bench.session.photo else self._tracked
+        items = await look(bench, thing)
+        bench.found[thing] = items
+        return items
+
+    # One image call finds them all, however many; the still cache makes asking again free.
+    async def _on_photo(self, bench: Bench, thing: str) -> tuple[Item, ...]:
+        footage = bench.footage
+        looks = await self._stills.look(footage, {thing: {0.0}}, bench.segmenters.image)
+        bench.charges += looks.charges
+        tracks = [
+            Track(footage_id=footage.id, track_id=f"{thing}-{n}", concept=thing, observations=(o,))
+            for n, o in enumerate(looks.observations, 1)
+        ]
+        return _placed(thing, tracks)
+
+    # SAM tracks the thing once over the stretches where something moves; the observation cache
+    # makes asking again free.
+    async def _tracked(self, bench: Bench, thing: str) -> tuple[Item, ...]:
         footage = bench.footage
         spans = bench.session.active_spans or (TimeSpan(start=0, end=footage.duration_s),)
         plan = SamplingPlan(
@@ -350,13 +462,11 @@ class Toolset:
                 SamplingWindow(span=span, fps=self._track_fps, concepts=(thing,)) for span in spans
             ),
         )
-        result = await self._runner.run(footage, plan, bench.segmenter)
+        result = await self._runner.run(footage, plan, bench.segmenters.video)
         bench.charges += result.charges
         tracks = naive_tracks(footage.id, result.observations, max(1.0, 3 / self._track_fps))
         # One sighting is too little to tell an item from noise.
-        items = _named(thing, [track for track in tracks if len(track.observations) >= 2])
-        bench.found[thing] = items
-        return items
+        return _named(thing, [track for track in tracks if len(track.observations) >= 2])
 
     # One picture of up to nine tiles per call; kept by its inputs, so the same look is free.
     async def _ask_sheet(self, bench: Bench, tiles: Sequence[Tile], prompt: str) -> dict[str, str]:
@@ -421,8 +531,7 @@ def _thing(text: str) -> str:
 # Each item is named by the moment it is seen largest. Two items at the same second are told
 # apart by where they are, from the left.
 def _named(thing: str, tracks: Sequence[Track]) -> tuple[Item, ...]:
-    best = [max(t.observations, key=lambda o: (o.box.x1 - o.box.x0) * (o.box.y1 - o.box.y0))
-            for t in tracks]  # fmt: skip
+    best = [_largest(t.observations) for t in tracks]
     groups: defaultdict[str, list[int]] = defaultdict(list)
     for index, observation in enumerate(best):
         groups[clock_time(observation.t)].append(index)
@@ -434,6 +543,45 @@ def _named(thing: str, tracks: Sequence[Track]) -> tuple[Item, ...]:
             labels[index] = f"the {thing} {where}at {clock}"
     order = sorted(range(len(tracks)), key=lambda i: (best[i].t, labels[i]))
     return tuple(Item(labels[i], tracks[i], best[i]) for i in order)
+
+
+# On a photo an item has only its place: its order from the left and, when items stand in rows,
+# its row. An item joins a row when its middle is above the bottom of the row's first item.
+def _placed(thing: str, tracks: Sequence[Track]) -> tuple[Item, ...]:
+    boxes = [track.observations[0].box for track in tracks]
+    rows: list[list[int]] = []
+    for index in sorted(range(len(tracks)), key=lambda i: _middle_y(boxes[i])):
+        if rows and _middle_y(boxes[index]) < boxes[rows[-1][0]].y1:
+            rows[-1].append(index)
+        else:
+            rows.append([index])
+    items: list[Item] = []
+    for number, row in enumerate(rows):
+        row.sort(key=lambda i: (boxes[i].x0 + boxes[i].x1, boxes[i].y0))
+        in_row = f" in {_row_name(number, len(rows))}" if len(rows) > 1 else ""
+        for place, index in enumerate(row, 1):
+            name = (
+                f"the {_ordinal(place)} {thing} from the left" if len(row) > 1 else f"the {thing}"
+            )
+            track = tracks[index]
+            items.append(Item(f"{name}{in_row}", track, track.observations[0]))
+    return tuple(items)
+
+
+def _row_name(number: int, rows: int) -> str:
+    if number == 0:
+        return "the top row"
+    if number == rows - 1:
+        return "the bottom row"
+    return f"the {_ordinal(number + 1)} row from the top"
+
+
+def _middle_y(box: Box) -> float:
+    return (box.y0 + box.y1) / 2
+
+
+def _largest(observations: Sequence[Observation]) -> Observation:
+    return max(observations, key=lambda o: (o.box.x1 - o.box.x0) * (o.box.y1 - o.box.y0))
 
 
 def _ordinal(n: int) -> str:
@@ -458,14 +606,77 @@ def _listed(items: Sequence[Item]) -> str:
     return join_words([*named, f"{rest} more"] if rest else named)
 
 
-def _mark(item: Item, clip: TimeSpan, answer: str) -> Mark:
-    path = tuple(
+def _area(bench: Bench, name: str | None) -> Area | None:
+    if name is None:
+        return None
+    area = bench.areas.get(_thing(name))
+    if area is None:
+        raise ToolError(f"no area named {name}; mark it first with the area tool")
+    return area
+
+
+# Only the sightings inside the area count, so an item's times there are its own.
+def _within(items: Sequence[Item], area: Area | None) -> tuple[Item, ...]:
+    if area is None:
+        return tuple(items)
+    kept: list[Item] = []
+    for item in items:
+        inside = tuple(o for o in item.track.observations if area.holds(o.box))
+        if inside:
+            track = item.track.model_copy(update={"observations": inside})
+            kept.append(Item(item.label, track, _largest(inside)))
+    return tuple(kept)
+
+
+def _in(area: Area | None) -> str:
+    return f" in {area.name}" if area else ""
+
+
+def _area_marks(area: Area | None) -> tuple[Mark, ...]:
+    return (area.mark,) if area else ()
+
+
+def _look_times(bench: Bench, times: Sequence[float] | None, area: Area | None) -> set[float]:
+    if bench.session.photo:
+        return {0.0}
+    if times:
+        return {min(max(t, 0.0), bench.footage.duration_s) for t in times}
+    if area:
+        return {area.t}
+    raise ToolError("give the thing whose items to look at, the times of frames, or an area")
+
+
+def _frame_name(bench: Bench, t: float, area: Area | None) -> str:
+    if bench.session.photo:
+        return area.name if area else "the photo"
+    return f"{area.name if area else 'the frame'} at {clock_time(t)}"
+
+
+# A count has something to show on a photo or in an area: every counted item, boxed. A count over
+# a whole video has no one moment.
+def _count_proof(
+    bench: Bench, items: Sequence[Item], area: Area | None
+) -> tuple[TimeSpan | None, tuple[Mark, ...]]:
+    if area is None and not bench.session.photo:
+        return None, ()
+    t = area.t if area else 0.0
+    clip = _around(TimeSpan(start=t, end=t), bench.footage.duration_s)
+    paths = [_path(item, clip) for item in items]
+    counted = [Mark(kind="passed", tag="", path=path) for path in paths if path]
+    return clip, (*_area_marks(area), *counted)
+
+
+def _path(item: Item, clip: TimeSpan) -> tuple[Sighting, ...]:
+    return tuple(
         Sighting(t=o.t, box=o.box)
         for o in item.track.observations
         if clip.start - 1 <= o.t <= clip.end + 1
     )
-    tag = answer if len(answer) <= 24 else answer[:23] + "…"
-    return Mark(kind="flagged", tag=tag, path=path or (Sighting(t=item.best.t, box=item.best.box),))
+
+
+def _mark(item: Item, clip: TimeSpan, answer: str) -> Mark:
+    path = _path(item, clip) or (Sighting(t=item.best.t, box=item.best.box),)
+    return Mark(kind="flagged", tag=short_tag(answer), path=path)
 
 
 def _seen(item: Item) -> TimeSpan:

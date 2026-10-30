@@ -26,7 +26,13 @@ from rewind.core.analysis.insights import (
     SavedInsight,
     SheetMaker,
 )
-from rewind.core.analysis.parts import StillGrabber, checkpoint_parts, tracking_spec
+from rewind.core.analysis.parts import (
+    PartLooker,
+    StillGrabber,
+    checkpoint_parts,
+    still_key,
+    tracking_spec,
+)
 from rewind.core.analysis.progress import Checklist, Notifier, Step, about_time
 from rewind.core.analysis.proof import ClipMaker, Mark, ProofMarks, Sighting, short_reason
 from rewind.core.analysis.replies import (
@@ -59,6 +65,7 @@ __all__ = [
     "Insights",
     "Mark",
     "Notifier",
+    "PartLooker",
     "ProofMarks",
     "Read",
     "RuleOutcome",
@@ -89,6 +96,7 @@ __all__ = [
     "rule_sentence",
     "sample_line_id",
     "short_reason",
+    "still_key",
     "tracking_spec",
     "video_length",
     "violation_line",

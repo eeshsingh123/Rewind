@@ -15,6 +15,7 @@ from rewind.core.ports import VideoToolsError
 # Colours are BGR. Red for what broke the rule, green for what passed or was found.
 _RED = (40, 40, 225)
 _GREEN = (70, 190, 60)
+_AMBER = (30, 170, 240)
 _WHITE = (255, 255, 255)
 _SHADE = (20, 20, 20)
 _MAX_HEIGHT = 720
@@ -23,6 +24,8 @@ _MAX_GAP_S = 1.2
 # Past its first or last sighting, an item is held in place this long.
 _HOLD_S = 0.3
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
+_COLOURS = {"passed": _GREEN, "area": _AMBER}
+_PHOTO_QUALITY = 90
 
 
 class OpenCvProofClips:
@@ -33,6 +36,9 @@ class OpenCvProofClips:
         self, source: Path, destination: Path, span: TimeSpan, marks: Sequence[Mark]
     ) -> None:
         await asyncio.to_thread(_render, self._ffmpeg, source, destination, span, tuple(marks))
+
+    async def make_photo(self, source: Path, destination: Path, marks: Sequence[Mark]) -> None:
+        await asyncio.to_thread(_render_photo, source, destination, tuple(marks))
 
 
 def _render(
@@ -70,6 +76,15 @@ def _render(
     _finish(encoder)
 
 
+def _render_photo(source: Path, destination: Path, marks: tuple[Mark, ...]) -> None:
+    frame = cv2.imread(str(source))
+    if frame is None:
+        raise VideoToolsError(f"cannot open {source.name}")
+    _draw_marks(frame, 0.0, marks)
+    if not cv2.imwrite(str(destination), frame, [cv2.IMWRITE_JPEG_QUALITY, _PHOTO_QUALITY]):
+        raise VideoToolsError("could not write the proof photo")
+
+
 def _fit(frame: np.ndarray) -> np.ndarray:
     height, width = frame.shape[:2]
     if height <= _MAX_HEIGHT:
@@ -80,15 +95,21 @@ def _fit(frame: np.ndarray) -> np.ndarray:
 
 
 def _draw(frame: np.ndarray, t: float, marks: tuple[Mark, ...]) -> None:
+    _draw_marks(frame, t, marks)
+    scale = frame.shape[0] / 720
+    _label(frame, _clock(t), (round(12 * scale), round(40 * scale)), _SHADE, scale)
+
+
+def _draw_marks(frame: np.ndarray, t: float, marks: tuple[Mark, ...]) -> None:
     height, width = frame.shape[:2]
     scale = height / 720
     # Flagged last, so its box and tag sit on top.
     for mark in sorted(marks, key=lambda m: m.kind == "flagged"):
-        box = _box_at(mark.path, t)
+        box = mark.path[0].box if mark.kind == "area" else _box_at(mark.path, t)
         if box is None:
             continue
         flagged = mark.kind == "flagged"
-        colour = _GREEN if mark.kind == "passed" else _RED
+        colour = _COLOURS.get(mark.kind, _RED)
         x0, y0, x1, y1 = _pixels(box, width, height)
         cv2.rectangle(
             frame, (x0, y0), (x1, y1), colour, max(2, round((5 if flagged else 2) * scale))
@@ -99,7 +120,6 @@ def _draw(frame: np.ndarray, t: float, marks: tuple[Mark, ...]) -> None:
             cv2.rectangle(frame, (px0, py0), (px1, py1), _GREEN, max(2, round(2 * scale)))
         if mark.tag:
             _label(frame, mark.tag, (x0, y0), colour, scale)
-    _label(frame, _clock(t), (round(12 * scale), round(40 * scale)), _SHADE, scale)
 
 
 def _box_at(path: Sequence[Sighting], t: float) -> Box | None:

@@ -1,7 +1,8 @@
 # Live smoke run of upload-and-ask, with real Muse and SAM calls; never run in CI.
 #   uv run python scripts/smoke_ask.py data/sim/s1_jar_line-seed2/video.mp4
 #       --ask "Anything wrong here?" --ask "Which jars have no label?"
-# Prints the first look, each step as it happens, and each answer with its proof clips and cost.
+#   uv run python scripts/smoke_ask.py path/to/photo.jpg --ask "Does each box have a label?"
+# Prints the first look, each step as it happens, and each answer with its proof and cost.
 # Reruns are free: every Muse look and SAM track is cached by its inputs.
 
 import argparse
@@ -49,25 +50,24 @@ async def main() -> None:
         key = f"uploads/{session_id}/{args.clip.name}"
         await blobs.write_file(key, args.clip)
         scope = BudgetScope("smoke", session_id)
-        model, segmenter = ask.model(scope), ask.segmenter(scope)
+        model, segmenters = ask.model(scope), ask.segmenters(scope)
 
         session, _ = await ask.sessions.open(session_id, key, model, show)
         look = session.first_look
         print(f"\n{look.summary}", flush=True)
         for moment in look.moments:
-            print(
-                f"  {clock_time(moment.span.start)} to {clock_time(moment.span.end)} {moment.what}"
-            )
+            when = f"{clock_time(moment.span.start)} to {clock_time(moment.span.end)} "
+            print(f"  {'' if session.photo else when}{moment.what}")
         print("Try:", *look.questions, sep="\n  ", flush=True)
 
         for question in args.ask:
             print(f"\n--- you: {question}", flush=True)
-            answer = await ask.agent.ask(session, question, model, segmenter, show)
+            answer = await ask.agent.ask(session, question, model, segmenters, show)
             session = await ask.sessions.get(session_id) or session
             for finding in answer.findings:
                 print(f"- {finding.text} ({finding.kind})", flush=True)
-                if finding.clip_key:
-                    print(f"    ▶ {await blobs.local_path(finding.clip_key)}", flush=True)
+                if finding.proof_key:
+                    print(f"    ▶ {await blobs.local_path(finding.proof_key)}", flush=True)
             if not answer.findings:
                 print(answer.text, flush=True)
             print(f"cost ${answer.cost_usd:.4f}", flush=True)

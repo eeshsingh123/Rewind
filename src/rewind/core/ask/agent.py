@@ -4,12 +4,12 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from rewind.contracts import Charge, CostEstimate
+from rewind.contracts import Charge, CostEstimate, TimeSpan
 from rewind.core.analysis import clock_time
-from rewind.core.ask.clips import ProofClips
 from rewind.core.ask.evidence import Claim, Kind, Notebook
+from rewind.core.ask.proofs import Proofs
 from rewind.core.ask.session import Exchange, OnStep, Session, Sessions, Step
-from rewind.core.ask.tools import AskTool, Bench, Started, ToolError
+from rewind.core.ask.tools import AskTool, Bench, Segmenters, Started, ToolError
 from rewind.core.budget import BudgetExceededError
 from rewind.core.ports import (
     AssistantMessage,
@@ -18,7 +18,6 @@ from rewind.core.ports import (
     Effort,
     LanguageModel,
     LanguageModelError,
-    Segmenter,
     SegmenterError,
     SystemMessage,
     Tool,
@@ -31,32 +30,51 @@ logger = logging.getLogger(__name__)
 
 ANSWER = "answer"
 _OUTPUT_UNITS = frozenset({"output_token", "reasoning_token"})
-NOTHING_BACKED = "I couldn't back an answer to that with what I found in the video."
+NOTHING_BACKED = "I couldn't back an answer to that with what I found."
 NUDGE = "Give your answer by calling answer, citing the evidence ids behind each sentence."
 
 INSTRUCTIONS = """\
-You answer questions about one video for the person in charge of the place it shows. You never \
-see the video yourself: you use tools, and each tool result is evidence with an id.
+You answer questions about one {media} for the person in charge of the place it shows. You never \
+see the {media} yourself: you use tools, and each tool result is evidence with an id.
 
-- watch: Muse watches the video or a stretch of it. Good for what happens, when, and why. It \
-can miss single items or miscount them.
-- find: tracks every item of one kind of thing and names each by when it is seen best ("the jar \
-at 00:14"). Use it when a question is about separate items. It costs the most; call it once per \
-thing.
-- look: a close look at each item of a found thing, or at whole frames, with one question for \
-each ("Does it have a label?"). Use it to judge items one by one.
-- measure: code counts a thing's items and times them: pace, stops in the flow, time in view.
+{watch}- find: finds every item of one kind of thing and names each {named}. Use it when a \
+question is about separate items. It costs the most; call it once per thing.
+- look: a close look at each item of a found thing, or at a whole {frame} or an area, with one \
+question for each ("Does it have a label?"). Use it to judge items one by one.
+- measure: {measure}
+- area: marks one named part of the {frame} ("the left half"){when}, so find, look and measure \
+can work on that part alone by naming it. Use it when a question is about one part of the \
+{frame}. If the area cannot be made out, say so plainly and do not guess where it is.
 - answer: your reply, as claims.
 
-The first look below is a quick pass over the whole video: use it to know where to look, and \
+The first look below is a quick pass over the whole {media}: use it to know where to look, and \
 confirm claims about single items with find and look before stating them. Plan a few steps, \
 then answer. Do not call a tool again with the same arguments.
 
 Answer with answer. Each claim is one short plain sentence for a manager, not an engineer: \
-times as mm:ss, items named as tools named them, no ids, no tool names. Each claim cites the \
+{places}, items named as tools named them, no ids, no tool names. Each claim cites the \
 evidence ids that back it, and states numbers and times only as that evidence writes them. Lead \
 with the direct answer. When the evidence cannot answer something, say so plainly in a claim \
 citing what you looked at. Use as few claims as answer the question."""
+VIDEO_WORDS = {
+    "media": "video",
+    "frame": "frame",
+    "watch": "- watch: Muse watches the video or a stretch of it. Good for what happens, when, "
+    "and why. It can miss single items or miscount them.\n",
+    "named": 'by when it is seen best ("the item at 00:14")',
+    "measure": "code counts a thing's items and times them: pace, stops in the flow, time in view.",
+    "when": " on the frame at a time you give",
+    "places": "times as mm:ss",
+}
+PHOTO_WORDS = {
+    "media": "photo",
+    "frame": "photo",
+    "watch": "",
+    "named": 'by where it is ("the 2nd item from the left")',
+    "measure": "code counts a thing's items.",
+    "when": "",
+    "places": "say where things are, never a time",
+}
 
 
 class _ClaimArguments(BaseModel):
@@ -81,8 +99,8 @@ ANSWER_TOOL = Tool(
 class Finding:
     text: str
     kind: Kind
-    # The proof clip's blob key; None when the evidence has no moment to show.
-    clip_key: str | None
+    # The proof's blob key, a clip or on a photo an image; None when there is nothing to show.
+    proof_key: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,12 +127,12 @@ class AskAgent:
         self,
         sessions: Sessions,
         tools: tuple[AskTool, ...],
-        clips: ProofClips,
+        proofs: Proofs,
         limits: AskLimits,
     ) -> None:
         self._sessions = sessions
         self._tools = {tool.name: tool for tool in tools}
-        self._clips = clips
+        self._proofs = proofs
         self._limits = limits
 
     async def ask(
@@ -122,13 +140,14 @@ class AskAgent:
         session: Session,
         question: str,
         model: LanguageModel,
-        segmenter: Segmenter,
+        segmenters: Segmenters,
         on_step: OnStep,
     ) -> Answer:
         notebook = Notebook()
-        bench = Bench(session, model, segmenter, notebook)
+        bench = Bench(session, model, segmenters, notebook)
+        instructions = INSTRUCTIONS.format(**(PHOTO_WORDS if session.photo else VIDEO_WORDS))
         state = _state(session, notebook)
-        messages: list[ChatMessage] = [SystemMessage(INSTRUCTIONS), SystemMessage(state)]
+        messages: list[ChatMessage] = [SystemMessage(instructions), SystemMessage(state)]
         for exchange in session.exchanges:
             messages += [UserMessage(exchange.question), AssistantMessage(exchange.answer)]
         messages.append(UserMessage(question))
@@ -141,8 +160,8 @@ class AskAgent:
         findings: list[Finding] = []
         for claim in claims:
             shown = claim.shown
-            clip = await self._clips.render(session.footage, shown) if shown else None
-            findings.append(Finding(claim.text, claim.kind, clip))
+            proof = await self._proofs.render(session, shown) if shown else None
+            findings.append(Finding(claim.text, claim.kind, proof))
         answer = Answer(tuple(findings), run.spent)
         exchanges = (*session.exchanges, Exchange(question=question, answer=answer.text))
         await self._sessions.save(session.model_copy(update={"exchanges": exchanges}))
@@ -160,7 +179,7 @@ class AskAgent:
                 CompletionRequest(
                     messages=tuple(messages),
                     max_output_tokens=run.tokens_left,
-                    tools=self._offered(run),
+                    tools=self._offered(bench, run),
                     effort=self._limits.effort,
                 )
             )
@@ -185,16 +204,17 @@ class AskAgent:
                 messages.append(ToolResultMessage(call.id, result))
         return kept
 
-    def _offered(self, run: "_Run") -> tuple[Tool, ...]:
+    def _offered(self, bench: Bench, run: "_Run") -> tuple[Tool, ...]:
         if not run.can_act():
             return (ANSWER_TOOL,)
-        return (*(tool.as_tool() for tool in self._tools.values()), ANSWER_TOOL)
+        usable = [t for t in self._tools.values() if not (t.video_only and bench.session.photo)]
+        return (*(tool.as_tool() for tool in usable), ANSWER_TOOL)
 
     async def _call(
         self, bench: Bench, name: str, arguments: str, run: "_Run", on_step: OnStep
     ) -> str:
         tool = self._tools.get(name)
-        if tool is None:
+        if tool is None or (tool.video_only and bench.session.photo):
             return f"error: there is no tool named {name!r}"
         if not run.can_act():
             return "error: no more steps for this question; answer with what you have"
@@ -256,10 +276,18 @@ def _claims(notebook: Notebook, raw: str) -> tuple[tuple[Claim, ...], list[str]]
 
 
 # What the agent knows before any tool: the video's length, Muse's first look as evidence,
-# and the questions already asked.
+# and the questions already asked. On a photo the first look's proof is the photo itself.
 def _state(session: Session, notebook: Notebook) -> str:
     look = session.first_look
     footage = session.footage
+    if session.photo:
+        whole = TimeSpan(start=0, end=0)
+        return "\n".join([
+            "This is one photo: nothing in it has a time.",
+            "First look (Muse looked at the whole photo once):",
+            notebook.add("seen", f"In the whole photo: {look.summary}", whole).line,
+            *(notebook.add("seen", m.what, whole).line for m in look.moments),
+        ])  # fmt: skip
     lines = [
         f"The video is {clock_time(footage.duration_s)} long.",
         "First look (Muse watched the whole video once):",

@@ -21,7 +21,8 @@ class Evidence:
     kind: Kind
     # States every number and time a claim citing it may use, times as mm:ss.
     text: str
-    # The stretch a proof clip shows, and the boxes drawn on it.
+    # The stretch a proof shows, and the boxes drawn on it. A photo has no stretch: any span
+    # means the photo itself.
     clip: TimeSpan | None = None
     marks: tuple[Mark, ...] = ()
 
