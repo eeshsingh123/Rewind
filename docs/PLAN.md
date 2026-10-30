@@ -6,7 +6,7 @@ Deadline: Nov 4, 9:00 PM ET (submit on the evening of Nov 4 IST).
 
 ## The demo story
 
-Someone sends a video from their phone (web, Telegram or WhatsApp) and asks in plain words: "anything wrong here?", "when did the belt stop and what did it cost?", "which bottles went out without a label?". Rewind watches, shows each step as it works, and answers in plain words with a clip for every claim. No setup: no lines, no rules to write first. Works on any footage, not only packing lines.
+Someone sends a photo or a video from their phone (web, Telegram or WhatsApp) and asks in plain words: "anything wrong here?", "when did the belt stop and what did it cost?", "does the top row of the shelf have dairy products?". Rewind looks, shows each step as it works, and answers in plain words with proof for every claim: a clip, or the photo with boxes drawn. No setup: no lines, no rules to write first. Works on anything a camera can see, from factory lines to dark stores, shops and supermarkets.
 
 ## Pivot (2026-10-30)
 
@@ -22,19 +22,21 @@ Muse video check on the jar clip (60 s, contributor model): the belt stop right 
 - Rules engine, proof clips with boxes and a clock, insights with checked claims, Telegram and WhatsApp channels (old flow, with lines and rule drafts).
 - Two sim clips with answer keys as test footage: `data/sim/s1_jar_line-seed2` (4 missing labels near 00:08, 00:20, 00:43, 00:48; 1 missing cap; belt stop 00:20.8–00:33.4) and `data/sim/s2_carton_packing-seed2` (3 without tape, 3 without a label, 3 with a flap up). SAM finds no label on s1 under any name; Muse looking at crops is the way now.
 
+- Upload and ask, the agent and its tools (**not yet checked live**). One photo or video is one session. On upload Muse goes over it once and returns a summary, what stands out and 3–5 questions; the result is cached. A Muse agent answers each question with `watch` (video only), `find`, `look`, `measure` and `area`. Every step sends a progress event. Code drops any claim whose numbers or times are not in its cited evidence, marks each kept claim "measured" or "seen", and attaches the proof. Each question has a $0.50 budget and a cap on steps and tokens. A photo has no times: SAM finds items with one image call, items are named by place ("the 2nd box from the left"), and the proof is the photo with boxes. An area is marked by Muse and confirmed by SAM, and code limits counts to it.
+
 ## Next, in order
 
 Each phase is one branch and one PR, small enough for one session.
 
-1. **The agent and its tools.** One video is one session (no lines). On upload: make the proxy, then Muse watches the whole video once and returns a scene summary, a timeline of events with times, and 3–5 suggested questions. Then a Muse agent answers any question with tools: `watch` (Muse on the video or a part of it), `find` (SAM tracks a thing), `look` (Muse on crops or frames), `measure` (code: counts, gaps, stops, durations, the rule engine), `clip` (proof clip with boxes). Every step sends a progress event. Every answer cites tool results; code drops any time or number not in them, and marks each claim "measured" or "seen". Per-question budget cap. Check from a script on s1 and s2.
-   Done when: on s1, "anything wrong?" names the stop with the right times, and "which jars have no label?" finds at least 3 of 4 with clips.
-2. **Web page.** Upload, the video with a timeline of clickable markers, a chat that streams the steps live, clips inline. Warm, neutral, calm colours; clean and minimal. Served by the existing FastAPI app. Also:
+1. **Live check of the agent.** Nothing in it has run against the APIs yet. Run `scripts/smoke_ask.py` on the s1 clip, then on a photo with a question about one area.
+   Done when: on s1, "anything wrong?" names the stop with the right times, and "which jars have no label?" finds at least 3 of 4 with clips; on the photo, an area is marked and confirmed and its count is right.
+2. **Web page.** Upload a photo or a video; a video gets a timeline of clickable markers. A chat streams the steps live, with proof inline. Warm, neutral, calm colours; clean and minimal. Served by the existing FastAPI app. Also:
    - Ready samples: 2–3 clips a visitor taps to get a cached answer at once, at no cost.
    - Each answer ends with a quiet cost line ("cost $0.003").
    - Point to track: drag a box on a frame and ask "follow this"; SAM tracks it from the box prompt.
    - Every session has its own link, so a chat can point to it.
    Done when: the owner uploads a clip in the browser, asks two questions and sees each step and each clip; a sample answers at once; a dragged box is tracked.
-3. **Telegram and WhatsApp on the new agent.** Send a video: the first look comes back with suggested questions as buttons. Ask anything. Progress is one message edited in place; the answer is one message with the clip. Remove lines, rule drafts and "Looks right" from the flow. Also:
+3. **Telegram and WhatsApp on the new agent.** Send a photo or a video: the first look comes back with suggested questions as buttons. Ask anything. Progress is one message edited in place; the answer is one message with the clip. Remove lines, rule drafts and "Looks right" from the flow. Also:
    - Voice notes in any language: Meta's speech-to-text turns the note into the question, and the answer comes back in the language asked.
    - Every answer ends with "Open the full timeline", linking to that session's web page.
    Done when: the same question gives the same answer on all three channels, and a Hindi voice note gets a Hindi answer.
@@ -66,4 +68,5 @@ If time runs short, cut from the bottom up. Never cut: proof clips, the accuracy
 
 - [ ] WhatsApp keys (names in `.env.example`).
 - [ ] Film one real 1–2 minute phone clip with a known fault (for example, packing boxes on a table with one left untaped) and note the fault times. Used in the demo and the accuracy table.
+- [ ] A real shelf or store photo or video, to check changes on a second kind of footage.
 - [ ] Decide hosting before phase 3: judges try it live, and a tunnel to the laptop works only while it is on.

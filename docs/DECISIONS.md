@@ -4,11 +4,17 @@ Why things are the way they are. Only decisions that still shape upcoming work a
 
 ## Product
 
-**Ask the footage: upload, ask, watch it work (2026-10-30, replaces "rules first").** Any video, any question, no setup. A video is a session; there are no lines and no rules to write first. Muse watches the whole video once on upload and offers a summary, a timeline and questions to try. Each question is answered by a Muse agent that plans its own steps with tools (`watch`, `find`, `look`, `measure`, `clip`), and every step is shown live. Broad scope: packing lines are the main demo, but any footage works.
+**Ask the footage: upload, ask, watch it work (2026-10-30, replaces "rules first").** Any photo or video, any question, no setup. One upload is a session; there are no lines and no rules to write first, and questions are asked per upload, with no saved standards. Muse goes over it once on upload and offers a summary, what stands out and questions to try. Each question is answered by a Muse agent that plans its own steps with tools (`watch`, `find`, `look`, `measure`, `area`), and every step is shown live. There is no `clip` tool: code attaches proof to each kept claim, so Muse cannot forget it. Any use case with a photo or a video works: factory lines, dark stores, shops, supermarkets. No prompt may name or favour one.
 Why: rules made the product rigid (one kind of question, only items leaving the view) and the setup felt like work. Muse reads a whole video well and cheaply (jar clip: the stop right, $0.0025), so it should plan and reason, not only translate.
 
 **Every claim still has proof.** Answers cite tool results (a time, an item, a clip). Code drops any time or number not in them and marks each claim "measured" (code counted it from SAM tracks) or "seen" (Muse judged it from video or crops). Muse's whole-video look finds where to look; per-item claims are confirmed with SAM tracks and crops before they are stated as counts.
 Why: Muse on the whole jar clip got the stop right but found only 1 of 4 missing labels and missed the cap; a close look at each item fixes that.
+
+**A photo is footage of one frame.** The `Footage` contract stays as it is: a photo is stored as one upright JPEG, one second long at 1 fps, and `Session.photo` says so. The same entry points serve both, and only what has no meaning on a photo branches: `watch` is not offered, `measure` is a count, items are named by place instead of time, and the proof is the photo with boxes instead of a clip.
+Why: phases 2 and 3 should not care which they got, and the old flow's contract must not change. Upright, because phones store rotation in EXIF and every box must fit what a person sees.
+
+**Areas: Muse marks, SAM confirms, code decides.** "The top row of the shelf" needs no drawing from the user. Muse returns a box on the frame (its grid runs 0–1000) and names the one kind of thing that fills it. SAM looks for that thing on the same frame with a concept prompt. The area is confirmed when a thing's middle is inside the box, or the box's middle is inside a thing; otherwise the tool says it could not be made out and the agent says so, with no box. The box kept is Muse's; SAM's instance may be one item in the area or larger than it. Inside means the middle of an item's box, and in a video only its sightings inside count. The count is "measured"; what Muse judges there is "seen".
+Why: SAM takes no spatial phrases and a box prompt outlines whatever is under the box, so it could not catch a wrong mark. A concept prompt can. A row of items is also not one object, so a box prompt's outline would not be the area. Not yet checked live.
 
 **Three channels: web, Telegram, WhatsApp.** The web page is where results are easiest to follow (video, timeline markers, live steps). Telegram and WhatsApp show it works from any phone. All three call the same agent and render the same progress events.
 
@@ -19,7 +25,7 @@ Why: Muse on the whole jar clip got the stop right but found only 1 of 4 missing
 **Insights: code finds the facts, Muse picks and words them, code checks every claim.** Each check saves a timeline per recording: every item each rule judged, pass or fail, and the stops. A stop is a gap in output longer than 3× the line's own usual gap (at least 5 s); the idle spans say whether the line stood still. From that, code writes a numbered fact sheet: stops and the output they cost, pace, each failure, the other recordings of the line, and patterns with how often chance alone would make them (failures in a row, failures that started or stopped at a moment, every Nth item, failures right after a restart). Notable means chance would make it less than 1 time in 20. Muse is called only when there is a notable fact. It gets the sheet plus one picture of cropped tiles (failed items boxed, the stop) and returns at most 3 insights, each citing its facts and a clip. Code drops any insight that cites an unknown fact or states a number or time that is not in its facts. A normal run gets one quiet line from code, and no call. Questions in chat (`ask_footage`) use the same sheet: unanswerable ones say why and suggest a rule. Answers are cached by their inputs, so the same question never costs twice.
 Why: every finding must be provable, and an insight shown on every run gets ignored. Muse adds what the numbers cannot: picking what matters, linking facts, and saying what a failure looks like.
 
-**Chat behaviour.** Fixed commands (`/start`, `/help`) make no model call. A video starts a session and gets the first look with suggested questions as buttons. Any message after that is a question about the latest video. Progress is one message, edited in place. The answer is one message with its clip. Confirmation is asked only above $0.50.
+**Chat behaviour.** Fixed commands (`/start`, `/help`) make no model call. A photo or a video starts a session and gets the first look with suggested questions as buttons. Any message after that is a question about the latest video. Progress is one message, edited in place. The answer is one message with its proof. Confirmation is asked only above $0.50.
 
 ## Architecture
 
@@ -41,7 +47,7 @@ Why: no hosting account or credit needed before the deadline; a host later is ne
 
 ## Cost
 
-**Prices.** SAM 3.1 video: $0.20 per 1,000 frames; image: $2.50 per 1,000. SAM takes one concept per request, bills every frame sent, has a 50-frame minimum per request and no fps setting. Muse Contributor: $0.10 in, $0.002 cached, $0.20 out per 1M tokens.
+**Prices.** SAM 3.1 video: $0.20 per 1,000 frames; image: $2.50 per 1,000. SAM takes one concept per request, bills every frame sent, has a 50-frame minimum per video request and no fps setting. An image request returns every match; only video stops at 16 objects. Muse Contributor: $0.10 in, $0.002 cached, $0.20 out per 1M tokens.
 
 **Budget for experiments: $150 in total.** Use Muse freely (a whole-video look costs well under a cent per minute of footage). SAM is the costly call; the agent calls it only when a question needs per-item counts or times.
 
