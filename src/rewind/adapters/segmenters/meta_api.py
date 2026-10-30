@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -44,28 +43,11 @@ class Response(_Lenient):
         )
 
 
-class _Uploaded(_Lenient):
-    id: str
-
-
 class MetaApi:
     def __init__(self, client: httpx.AsyncClient, api_key: str, base_url: str) -> None:
         self._client = client
         self._headers = {"Authorization": f"Bearer {api_key}"}
         self._base_url = base_url.rstrip("/")
-
-    async def upload_file(self, path: Path, mime: str, expires_after_s: int) -> str:
-        with path.open("rb") as file:
-            response = await self._post(
-                "files",
-                data={
-                    "purpose": "user_data",
-                    "expires_after[anchor]": "created_at",
-                    "expires_after[seconds]": str(expires_after_s),
-                },
-                files={"file": (path.name, file, mime)},
-            )
-        return _validate(_Uploaded, response.json()).id
 
     async def create_response(self, payload: dict[str, Any]) -> Response:
         response = await self._post("responses", json={**payload, "stream": False})

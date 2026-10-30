@@ -25,7 +25,8 @@ class Sighting(BaseModel):
 class Mark(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     # "flagged" is the item the clip is about; others in view are drawn thin, by their result.
-    kind: Literal["flagged", "failed", "passed"]
+    # "area" is a part of the frame, drawn at its one sighting for the whole clip.
+    kind: Literal["flagged", "failed", "passed", "area"]
     tag: str
     path: tuple[Sighting, ...]
     # Parts found on the item, as boxes relative to the item's own box, so they move with it.

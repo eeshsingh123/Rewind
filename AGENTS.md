@@ -1,6 +1,6 @@
 # Rewind
 
-Ask your footage anything, from the web, Telegram or WhatsApp. The user uploads a video and asks in plain words, with no setup. Muse Spark watches it, plans the steps and calls tools: SAM 3.1 to track things, crops to look closer, and plain code to count, time and draw the proof. Each step shows live, and every claim comes with a clip. Meta AI Developer Hackathon, Indie track; due Nov 4, 9:00 PM ET.
+Ask your footage anything, from the web, Telegram or WhatsApp. The user uploads a photo or a video and asks in plain words, with no setup. Muse Spark looks at it, plans the steps and calls tools: SAM 3.1 to track things, crops to look closer, and plain code to count, time and draw the proof. Each step shows live, and every claim comes with proof. Meta AI Developer Hackathon, Indie track; due Nov 4, 9:00 PM ET.
 
 ## Read first
 
