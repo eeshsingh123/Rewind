@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 from rewind.contracts import Box, Charge, Footage, Observation, SamplingPlan, TimeSpan
 from rewind.core.perception.cache import CachedFrames, CacheKey, ObservationStore, frame_index
 from rewind.core.perception.proxy import ProxyClip, ProxyMaker
+from rewind.core.perception.tracks import SAME_OBJECT_IOU, iou
 from rewind.core.ports import (
     ConceptPrompt,
     ObjectPrompt,
@@ -18,8 +20,13 @@ logger = logging.getLogger(__name__)
 
 # Spans are cut a little short of the frame limit, as a span's frame count can round up.
 _FRAME_HEADROOM = 0.98
-# Boxes of the same object on the same frame, seen by two requests, overlap at least this much.
-_SAME_OBJECT_IOU = 0.5
+# A long request stops noticing what comes into view after its first moments: items on a belt
+# went unseen for most of a clip, while a fresh request found them all. So a video is tracked in
+# short windows that share a frame, and an item in view this long is at the start of one.
+WINDOW_S = 5.0
+WINDOWS_AT_ONCE = 3
+# Observations cached under this are known to come from windows.
+_TRACKING = "windows"
 
 # Called with (done, total) after each piece of work, so a chat can show how far a check is.
 
@@ -38,36 +45,38 @@ class PerceptionRunner:
         self._store = store
 
     # One request per concept and fps over all its windows joined, unless the cache has it.
+    # Concepts run side by side; a concept's own chunks run in turn, as they share one cache entry.
     async def run(
         self,
         footage: Footage,
         plan: SamplingPlan,
         segmenter: Segmenter,
     ) -> PerceptionResult:
-        observations: list[Observation] = []
-        charges: list[Charge] = []
-        paid = cached = 0
-        work = [
-            (concept, fps, chunk)
-            for (concept, fps), spans in _group_windows(plan).items()
-            for chunk in _chunks(spans, fps, segmenter.max_frames)
-        ]
-        for concept, fps, chunk in work:
-            clip = await self._proxies.ensure(
-                footage.content_hash, footage.original_key, chunk, fps
-            )
-            found, new_charges = await self._segment(footage, clip, concept, segmenter)
-            observations.extend(found)
-            charges.extend(new_charges)
-            if new_charges:
-                paid += 1
-            else:
-                cached += 1
+        async def one(concept: str, fps: float, spans: list[TimeSpan]) -> PerceptionResult:
+            observations: list[Observation] = []
+            charges: list[Charge] = []
+            paid = cached = 0
+            for chunk in _chunks(spans, fps, segmenter.max_frames):
+                clip = await self._proxies.ensure(
+                    footage.content_hash, footage.original_key, chunk, fps
+                )
+                found, new_charges = await self._segment(footage, clip, concept, segmenter)
+                observations.extend(found)
+                charges.extend(new_charges)
+                if new_charges:
+                    paid += 1
+                else:
+                    cached += 1
+            return PerceptionResult(tuple(observations), tuple(charges), paid, cached)
+
+        parts = await asyncio.gather(
+            *(one(concept, fps, spans) for (concept, fps), spans in _group_windows(plan).items())
+        )
         return PerceptionResult(
-            observations=tuple(observations),
-            charges=tuple(charges),
-            paid_requests=paid,
-            cached_requests=cached,
+            observations=tuple(o for part in parts for o in part.observations),
+            charges=tuple(c for part in parts for c in part.charges),
+            paid_requests=sum(part.paid_requests for part in parts),
+            cached_requests=sum(part.cached_requests for part in parts),
         )
 
     # Follows the one thing under a box through the whole video, from that frame both ways. The
@@ -105,7 +114,7 @@ class PerceptionRunner:
     async def _segment(
         self, footage: Footage, clip: ProxyClip, concept: str, segmenter: Segmenter
     ) -> tuple[list[Observation], tuple[Charge, ...]]:
-        key = CacheKey(footage.content_hash, concept, segmenter.model_version)
+        key = CacheKey(footage.content_hash, concept, f"{segmenter.model_version}/{_TRACKING}")
         stored = await self._store.load(key, footage.id)
         indices = [frame_index(t, footage.fps) for t in clip.frame_times]
         hits = [o for index in dict.fromkeys(indices) for o in stored.frames.get(index, ())]
@@ -118,7 +127,7 @@ class PerceptionRunner:
             clip = await self._proxies.ensure(
                 footage.content_hash, footage.original_key, spans, clip.proxy.fps
             )
-        observations, charges = await self._track(footage, clip, concept, segmenter)
+        observations, charges = await self._windows(footage, clip, concept, segmenter)
         found: defaultdict[int, list[Observation]] = defaultdict(list)
         for observation in observations:
             found[frame_index(observation.t, footage.fps)].append(observation)
@@ -127,6 +136,42 @@ class PerceptionRunner:
         frames.update({index: tuple(seen) for index, seen in found.items()})
         await self._store.save(key, CachedFrames(frames=frames))
         return hits + observations, charges
+
+    # Windows run side by side and are joined in order, on the frame each shares with the next.
+    async def _windows(
+        self, footage: Footage, clip: ProxyClip, concept: str, segmenter: Segmenter
+    ) -> tuple[list[Observation], tuple[Charge, ...]]:
+        times = clip.frame_times
+        fps = clip.proxy.fps
+        step = max(1, round(WINDOW_S * fps))
+        gate = asyncio.Semaphore(WINDOWS_AT_ONCE)
+
+        async def tracked(first: int) -> tuple[list[Observation], tuple[Charge, ...]]:
+            wanted = [first <= i <= first + step for i in range(len(times))]
+            spans = _spans_around(times, wanted, fps)
+            async with gate:
+                part = await self._proxies.ensure(
+                    footage.content_hash, footage.original_key, spans, fps
+                )
+                return await self._track(footage, part, concept, segmenter)
+
+        if len(times) <= step + 1:
+            return await self._track(footage, clip, concept, segmenter)
+        starts = range(0, len(times) - 1, step)
+        parts = await asyncio.gather(*(tracked(first) for first in starts))
+        kept: list[Observation] = []
+        charges: list[Charge] = []
+        previous: list[Observation] = []
+        next_id = 0
+        for first, (seen, paid) in zip(starts, parts, strict=True):
+            charges.extend(paid)
+            found, next_id = _continue_ids(previous, seen, footage.fps, next_id)
+            shared = min(first + step, len(times) - 1)
+            last = frame_index(times[shared], footage.fps)
+            ending = shared == len(times) - 1
+            kept.extend(o for o in found if ending or frame_index(o.t, footage.fps) < last)
+            previous = [o for o in found if frame_index(o.t, footage.fps) == last]
+        return kept, tuple(charges)
 
     # A request stops finding new objects once it has found as many as the segmenter can follow,
     # so a busy line would lose every later item. From the frame where it filled up, a new request
@@ -192,12 +237,12 @@ def _continue_ids(
         shared = frame_index(previous[0].t, footage_fps)
         starts = [o for o in found if frame_index(o.t, footage_fps) == shared]
         pairs = sorted(
-            ((_iou(old.box, new.box), old.object_id, new.object_id)
+            ((iou(old.box, new.box), old.object_id, new.object_id)
              for old in previous for new in starts),
             key=lambda pair: -pair[0],
         )  # fmt: skip
-        for iou, old_id, new_id in pairs:
-            if iou < _SAME_OBJECT_IOU:
+        for overlap, old_id, new_id in pairs:
+            if overlap < SAME_OBJECT_IOU:
                 break
             if old_id is None or new_id is None or new_id in renamed:
                 continue
@@ -212,16 +257,6 @@ def _continue_ids(
         for o in found
     ]
     return renumbered, next_id
-
-
-def _iou(a: Box, b: Box) -> float:
-    width = min(a.x1, b.x1) - max(a.x0, b.x0)
-    height = min(a.y1, b.y1) - max(a.y0, b.y0)
-    if width <= 0 or height <= 0:
-        return 0.0
-    inter = width * height
-    union = (a.x1 - a.x0) * (a.y1 - a.y0) + (b.x1 - b.x0) * (b.y1 - b.y0) - inter
-    return inter / union
 
 
 def _group_windows(plan: SamplingPlan) -> dict[tuple[str, float], list[TimeSpan]]:
