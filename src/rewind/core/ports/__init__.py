@@ -1,5 +1,13 @@
 from rewind.core.ports.blob_store import BlobStore, BlobStoreError
-from rewind.core.ports.channel import Channel, ChannelError
+from rewind.core.ports.channel import (
+    ActivityKind,
+    AttachmentTooLargeError,
+    Channel,
+    ChannelError,
+    ChatChannel,
+    ChatRef,
+    ChatStore,
+)
 from rewind.core.ports.job_runner import JobHandler, JobPayload, JobRunner, JobRunnerError
 from rewind.core.ports.language_model import (
     AssistantMessage,
@@ -27,15 +35,29 @@ from rewind.core.ports.segmenter import (
     SegmenterError,
     SegmentRequest,
 )
+from rewind.core.ports.transcriber import (
+    SPEECH_BYTES_PER_S,
+    SPEECH_RATE_HZ,
+    Transcriber,
+    TranscriberError,
+    Transcript,
+)
 from rewind.core.ports.video_tools import VideoInfo, VideoTools, VideoToolsError
 
 __all__ = [
+    "SPEECH_BYTES_PER_S",
+    "SPEECH_RATE_HZ",
+    "ActivityKind",
     "AssistantMessage",
+    "AttachmentTooLargeError",
     "BlobStore",
     "BlobStoreError",
     "Channel",
     "ChannelError",
+    "ChatChannel",
     "ChatMessage",
+    "ChatRef",
+    "ChatStore",
     "Completion",
     "CompletionRequest",
     "ConceptPrompt",
@@ -60,6 +82,9 @@ __all__ = [
     "Tool",
     "ToolCall",
     "ToolResultMessage",
+    "Transcriber",
+    "TranscriberError",
+    "Transcript",
     "UserMessage",
     "VideoInfo",
     "VideoTools",

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from rewind.contracts import TimeSpan
-from rewind.core.ports import VideoInfo, VideoToolsError
+from rewind.core.ports import SPEECH_RATE_HZ, VideoInfo, VideoToolsError
 
 _SHOWINFO_PTS = re.compile(r"Parsed_showinfo.*?\bpts_time:\s*([0-9.eE+-]+)")
 _ENCODE = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p")
@@ -100,6 +100,16 @@ class FfmpegVideoTools:
             "-i", str(source),
             "-vf", f"scale=-2:'min({_PLAYBACK_HEIGHT},ih)'",
             *_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
+            str(destination),
+        )  # fmt: skip
+
+    async def speech(self, source: Path, destination: Path) -> None:
+        await _run(
+            self._ffmpeg,
+            "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+            "-i", str(source),
+            "-vn", "-ac", "1", "-ar", str(SPEECH_RATE_HZ), "-c:a", "pcm_s16le",
+            "-fflags", "+bitexact", "-f", "wav",
             str(destination),
         )  # fmt: skip
 

@@ -1,0 +1,26 @@
+{
+  "update_id": 500,
+  "message": {
+    "message_id": 11,
+    "from": {
+      "id": 7,
+      "is_bot": false,
+      "first_name": "Owner",
+      "username": "owner"
+    },
+    "chat": {
+      "id": 42,
+      "type": "private",
+      "first_name": "Owner",
+      "username": "owner"
+    },
+    "date": 1793000000,
+    "document": {
+      "file_id": "tg-heic",
+      "file_unique_id": "u5",
+      "file_name": "IMG_4021.HEIC",
+      "mime_type": "application/octet-stream",
+      "file_size": 3000000
+    }
+  }
+}

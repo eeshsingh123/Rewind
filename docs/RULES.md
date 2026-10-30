@@ -11,8 +11,8 @@ src/rewind/
     perception/   ingest, idle skip, sampling planner, SAM runner, cache
     rules/        rule language, predicates, engine, zones, compiler
     analysis/     a check end to end: tracks, parts, proof clips, replies
-    ask/          a photo or video session: Muse's first look, the agent, its tools, areas, checked claims
-    conversation/ the old chat flow with lines and rules (replaced by ask/ in phase 3)
+    ask/          a photo or video session: Muse's first look, the agent, its tools, areas, checked claims, and the chat flow every channel shares
+    conversation/ the old chat flow with lines and rules; no longer wired in
     budget/       ledger and budget guard
   adapters/    one module per external system, each implementing a core port
     segmenters/ models/ storage/ video/ jobs/ channels/

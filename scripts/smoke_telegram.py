@@ -1,6 +1,6 @@
-# Live smoke run of the Telegram channel with the real agent, SAM and rules; never run in CI.
+# Live smoke run of the Telegram channel with the real agent and SAM; never run in CI.
 #   uv run python scripts/smoke_telegram.py [--record-dir tests/recordings/telegram]
-#       [--send /start --send /sample] [--transcript smoke.md]
+#       [--send /start --send "Anything wrong here?"] [--transcript smoke.md]
 # Polls the bot like the app does, but hands every update to the inbox twice: the second must
 # be dropped. Telegram's updates are recorded with ids and names replaced, for adapter tests.
 # --send hands messages to the inbox as if the first allowed user had typed or tapped them, so
@@ -21,16 +21,18 @@ from typing import Any
 import httpx
 
 from rewind.adapters.storage.sql import SqlRepository
+from rewind.app.ask import build_ask
 from rewind.app.chat import build_chat
 from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
 from rewind.contracts import CanonicalMessage
+from rewind.core.ask import MENU
 from rewind.core.budget import EPOCH
-from rewind.core.conversation import MENU
 
 PERSON_KEYS = {"first_name": "Owner", "last_name": None, "username": "owner"}
 FAKE_ID = 100200300
-SENT = {"sendMessage", "editMessageText", "sendVideo", "setMyCommands"}
+FILES = {"sendVideo", "sendPhoto"}
+SENT = {"sendMessage", "editMessageText", "setMyCommands"} | FILES
 _CAPTION = re.compile(rb'name="caption"\r\n\r\n(.*?)\r\n--', re.DOTALL)
 
 
@@ -81,7 +83,7 @@ class RecordingTransport(httpx.AsyncBaseTransport):
     def _write(self, method: str, request: httpx.Request) -> None:
         assert self._transcript is not None
         at = f"{time.monotonic() - self._started:6.1f} s"
-        if method == "sendVideo":
+        if method in FILES:
             found = _CAPTION.search(request.content)
             text = found.group(1).decode() if found else ""
             buttons = "inline_keyboard" in request.content.decode(errors="ignore")
@@ -101,7 +103,8 @@ class RecordingTransport(httpx.AsyncBaseTransport):
         self._directory.mkdir(parents=True, exist_ok=True)
         kind = next((k for k in ("callback_query", "message") if k in update), "other")
         message = update.get("message", {})
-        kind += "_video" if "video" in message or "document" in message else ""
+        files = ("video", "video_note", "photo", "voice", "audio", "document")
+        kind += "".join(f"_{file}" for file in files if file in message)
         name = f"{update['update_id']}_{kind}.json"
         (self._directory / name).write_text(json.dumps(redact(update), indent=2), "utf-8")
 
@@ -132,8 +135,8 @@ async def main() -> None:
     await repository.create_tables()
     transport = RecordingTransport(args.record_dir, args.transcript)
     async with httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(120)) as client:
-        perception = build_perception(settings, client, repository)
-        chat = build_chat(settings, client, repository, perception)
+        ask = build_ask(settings, client, build_perception(settings, client, repository))
+        chat = build_chat(settings, client, repository, ask, ask.runs())
         assert chat.telegram is not None
 
         async def receive_twice(message: CanonicalMessage) -> bool:

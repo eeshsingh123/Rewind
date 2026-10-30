@@ -1,15 +1,20 @@
+import math
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 from rewind.contracts import Charge, CostEstimate
 from rewind.core.budget.ledger import Ledger
 from rewind.core.ports import (
+    SPEECH_BYTES_PER_S,
     Completion,
     CompletionRequest,
     LanguageModel,
     Segmentation,
     Segmenter,
     SegmentRequest,
+    Transcriber,
+    Transcript,
     UserMessage,
 )
 
@@ -67,6 +72,40 @@ class BudgetedSegmenter:
                 raise
             await self._ledger.record(self._scope.workspace_id, self._scope.job_id, result.charges)
         return result
+
+
+class BudgetedTranscriber:
+    def __init__(self, inner: Transcriber, ledger: Ledger, scope: BudgetScope) -> None:
+        self._inner = inner
+        self._ledger = ledger
+        self._scope = scope
+
+    @property
+    def model_version(self) -> str:
+        return self._inner.model_version
+
+    @property
+    def max_seconds(self) -> int:
+        return self._inner.max_seconds
+
+    def estimate(self, seconds: int) -> tuple[Charge, ...]:
+        return self._inner.estimate(seconds)
+
+    async def transcribe(self, source: Path) -> Transcript:
+        charges = self.estimate(math.ceil(source.stat().st_size / SPEECH_BYTES_PER_S))
+        estimate = CostEstimate(charges=charges).total_usd
+        async with self._ledger.reserve(self._scope.workspace_id, estimate):
+            try:
+                transcript = await self._inner.transcribe(source)
+            except Exception:
+                await self._ledger.record_failure(
+                    self._scope.workspace_id, self._scope.job_id, charges
+                )
+                raise
+            await self._ledger.record(
+                self._scope.workspace_id, self._scope.job_id, transcript.charges
+            )
+        return transcript
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,30 +1,42 @@
 import hashlib
 import hmac
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rewind.contracts import Attachment, Button, CanonicalMessage, ChannelCapabilities, Reply
-from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
-from rewind.core.ports import BlobStore, ChannelError
+from rewind.core.ask import attachment_kind
+from rewind.core.ports import ActivityKind, AttachmentTooLargeError, BlobStore, ChannelError
 
 logger = logging.getLogger(__name__)
 
-GRAPH_BASE = "https://graph.facebook.com/v24.0"
-# Cloud API limits: videos up to 16 MB, 3 reply buttons with 20-character titles, 1024
-# characters of body text on a message with buttons.
+GRAPH_BASE = "https://graph.facebook.com/v26.0"
+# Cloud API limits: videos up to 16 MB and images up to 5 MB, captions of 1024 characters. Reply
+# buttons fit no question (3 of them, 20 characters), so choices go as one list message: 10 rows
+# of a 24-character title and a 72-character description.
 MEDIA_LIMIT_BYTES = 16 * 1024 * 1024
 CAPABILITIES = ChannelCapabilities(
-    max_text_chars=4096, max_media_bytes=MEDIA_LIMIT_BYTES, max_buttons=3
+    max_text_chars=4096,
+    max_media_bytes=MEDIA_LIMIT_BYTES,
+    max_buttons=10,
+    max_image_bytes=5 * 1024 * 1024,
+    can_edit=False,
 )
-_BUTTON_TITLE_CHARS = 20
-_BUTTON_BODY_CHARS = 1024
+_CAPTION_CHARS = 1024
+_ROW_TITLE_CHARS = 24
+_ROW_DESCRIPTION_CHARS = 72
+_LIST_BUTTON = "Pick a question"
+_LIST_SECTION = "Questions"
+_MEDIA_TYPES = {"video": "video/mp4", "image": "image/jpeg"}
+# The typing indicator lasts up to 25 s; it is not sent again sooner than this.
+_TYPING_EVERY_S = 20.0
 # WhatsApp cannot edit a sent message, so a job's progress is at most this many messages.
 _PROGRESS_MESSAGES = 2
 WEBHOOK_PATH = "/whatsapp/webhook"
@@ -53,6 +65,7 @@ class _ButtonReply(_Model):
 class _Interactive(_Model):
     type: str
     button_reply: _ButtonReply | None = None
+    list_reply: _ButtonReply | None = None
 
 
 class _Message(_Model):
@@ -62,6 +75,8 @@ class _Message(_Model):
     type: str
     text: _Text | None = None
     video: _Media | None = None
+    image: _Media | None = None
+    audio: _Media | None = None
     document: _Media | None = None
     interactive: _Interactive | None = None
 
@@ -96,6 +111,8 @@ class WhatsAppChannel:
         self._phone_number_id = phone_number_id
         self._blobs = blobs
         self._progress: dict[tuple[str, str], int] = {}
+        # Per chat: the message the indicator was last shown for, and when.
+        self._typing: dict[str, tuple[str, float]] = {}
 
     @property
     def name(self) -> str:
@@ -106,35 +123,22 @@ class WhatsAppChannel:
         return CAPABILITIES
 
     async def send(self, reply: Reply) -> None:
-        # One video with buttons and no other text goes as one message: the video is its header.
-        joined = len(reply.media) == 1 and bool(reply.buttons) and not reply.text
-        header: dict[str, Any] | None = None
+        text = reply.text
         for media in reply.media:
-            media_id = await self._upload(await self._blobs.local_path(media.blob_key))
-            if joined:
-                header = {"type": "video", "video": {"id": media_id}}
-                continue
-            video: dict[str, Any] = {"id": media_id}
-            if media.caption:
-                video["caption"] = media.caption
-            await self._message(reply.chat_id, {"type": "video", "video": video})
+            path = await self._blobs.local_path(media.blob_key)
+            shown: dict[str, Any] = {"id": await self._upload(path, _MEDIA_TYPES[media.kind])}
+            caption = media.caption or ""
+            if len(caption) > _CAPTION_CHARS:
+                text = f"{caption}\n\n{text}".strip()
+            elif caption:
+                shown["caption"] = caption
+            await self._message(reply.chat_id, {"type": media.kind, media.kind: shown})
         if reply.buttons:
-            buttons = [
-                {"type": "reply", "reply": {"id": b.value, "title": b.label[:_BUTTON_TITLE_CHARS]}}
-                for b in reply.buttons[: CAPABILITIES.max_buttons]
-            ]
-            body = reply.text or (reply.media[0].caption if joined else None) or "…"
-            interactive: dict[str, Any] = {
-                "type": "button",
-                "body": {"text": body[:_BUTTON_BODY_CHARS]},
-                "action": {"buttons": buttons},
-            }
-            if header is not None:
-                interactive["header"] = header
-            await self._message(reply.chat_id, {"type": "interactive", "interactive": interactive})
-        elif reply.text:
-            text = {"body": reply.text[: CAPABILITIES.max_text_chars]}
-            await self._message(reply.chat_id, {"type": "text", "text": text})
+            chosen = reply.buttons[: CAPABILITIES.max_buttons]
+            await self._message(reply.chat_id, _list(text or "…", chosen))
+        elif text:
+            body = {"body": text[: CAPABILITIES.max_text_chars]}
+            await self._message(reply.chat_id, {"type": "text", "text": body})
 
     async def show_progress(
         self, chat_id: str, key: str, text: str, buttons: tuple[Button, ...] = ()
@@ -149,10 +153,24 @@ class WhatsAppChannel:
         self._progress[(chat_id, key)] = sent + 1
         await self._message(chat_id, {"type": "text", "text": {"body": text}})
 
-    # The Cloud API ties its typing indicator to marking one received message as read, so it
-    # needs that message's id; background jobs have none. Without it, nothing is shown.
-    async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
-        return
+    # The Cloud API ties its typing indicator to marking one received message as read.
+    async def show_activity(
+        self, chat_id: str, kind: ActivityKind, message_id: str | None = None
+    ) -> None:
+        if message_id is None:
+            return
+        now = time.monotonic()
+        shown = self._typing.get(chat_id)
+        if shown is not None and shown[0] == message_id and now - shown[1] < _TYPING_EVERY_S:
+            return
+        self._typing[chat_id] = (message_id, now)
+        body = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+            "typing_indicator": {"type": "text"},
+        }
+        await self._post(f"{GRAPH_BASE}/{self._phone_number_id}/messages", json=body)
 
     async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:
         if (attachment.size_bytes or 0) > MEDIA_LIMIT_BYTES:
@@ -173,12 +191,12 @@ class WhatsAppChannel:
         body = {"messaging_product": "whatsapp", "to": chat_id, **content}
         await self._post(f"{GRAPH_BASE}/{self._phone_number_id}/messages", json=body)
 
-    async def _upload(self, path: Path) -> str:
+    async def _upload(self, path: Path, mime_type: str) -> str:
         with path.open("rb") as file:
             result = await self._post(
                 f"{GRAPH_BASE}/{self._phone_number_id}/media",
-                data={"messaging_product": "whatsapp", "type": "video/mp4"},
-                files={"file": (path.name, file, "video/mp4")},
+                data={"messaging_product": "whatsapp", "type": mime_type},
+                files={"file": (path.name, file, mime_type)},
             )
         return str(result["id"])
 
@@ -195,6 +213,33 @@ class WhatsAppChannel:
         except httpx.HTTPError as error:
             raise ChannelError(f"whatsapp request failed: {type(error).__name__}") from error
         return _result(response)
+
+
+def _list(body: str, buttons: tuple[Button, ...]) -> dict[str, Any]:
+    interactive = {
+        "type": "list",
+        "body": {"text": body[: CAPABILITIES.max_text_chars]},
+        "action": {
+            "button": _LIST_BUTTON,
+            "sections": [{"title": _LIST_SECTION, "rows": [_row(b) for b in buttons]}],
+        },
+    }
+    return {"type": "interactive", "interactive": interactive}
+
+
+# A question rarely fits a row's title, so it runs on into the description.
+def _row(button: Button) -> dict[str, str]:
+    label = button.label
+    row = {"id": button.value, "title": label[:_ROW_TITLE_CHARS]}
+    if len(label) <= _ROW_TITLE_CHARS:
+        return row
+    cut = label.rfind(" ", 1, _ROW_TITLE_CHARS + 1)
+    cut = cut if cut > 0 else _ROW_TITLE_CHARS
+    return {
+        "id": button.value,
+        "title": label[:cut],
+        "description": label[cut:].strip()[:_ROW_DESCRIPTION_CHARS],
+    }
 
 
 def _result(response: httpx.Response) -> Any:
@@ -229,17 +274,18 @@ def parse_webhook(raw: dict[str, Any]) -> tuple[CanonicalMessage, ...]:
 def _canonical(message: _Message) -> CanonicalMessage | None:
     text: str | None = None
     attachments: tuple[Attachment, ...] = ()
+    media = message.video or message.image or message.audio or message.document
     if message.text is not None:
         text = message.text.body
-    elif message.interactive is not None and message.interactive.button_reply is not None:
-        text = message.interactive.button_reply.id
-    elif message.video is not None:
-        text = message.video.caption
-        attachments = (_attachment(message.video, "video"),)
-    elif message.document is not None:
-        is_video = (message.document.mime_type or "").startswith("video/")
-        text = message.document.caption
-        attachments = (_attachment(message.document, "video" if is_video else "file"),)
+    elif message.interactive is not None:
+        reply = message.interactive.list_reply or message.interactive.button_reply
+        text = reply.id if reply is not None else None
+    elif media is not None:
+        text = media.caption
+        kind = attachment_kind(media.mime_type, media.filename)
+        attachments = (
+            Attachment(kind=kind, ref=media.id, mime_type=media.mime_type, filename=media.filename),
+        )
     if not text and not attachments:
         return None
     return CanonicalMessage(
@@ -247,10 +293,6 @@ def _canonical(message: _Message) -> CanonicalMessage | None:
         sender_id=message.sender, received_at=datetime.fromtimestamp(int(message.timestamp), UTC),
         text=text, attachments=attachments,
     )  # fmt: skip
-
-
-def _attachment(media: _Media, kind: Literal["video", "file"]) -> Attachment:
-    return Attachment(kind=kind, ref=media.id, mime_type=media.mime_type, filename=media.filename)
 
 
 def webhook_router(
@@ -304,5 +346,19 @@ async def register_webhook(
         )
     except httpx.HTTPError as error:
         message = f"whatsapp webhook registration failed: {type(error).__name__}"
+        raise ChannelError(message) from error
+    _result(response)
+
+
+# Delivers this WhatsApp account's messages to the app; without it the webhook stays silent.
+async def subscribe_account(client: httpx.AsyncClient, token: str, account_id: str) -> None:
+    try:
+        response = await client.post(
+            f"{GRAPH_BASE}/{account_id}/subscribed_apps",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=60,
+        )
+    except httpx.HTTPError as error:
+        message = f"whatsapp account subscription failed: {type(error).__name__}"
         raise ChannelError(message) from error
     _result(response)

@@ -59,7 +59,7 @@ class SpentModel(ScriptedModel):
 async def serving(
     flow: Flow, model: ScriptedModel, *samples: Sample
 ) -> AsyncIterator[httpx.AsyncClient]:
-    runs = Runs(flow.sessions, flow.agent, lambda _: (model, flow.segmenters))
+    runs = Runs(flow.sessions, flow.agent, lambda *_: (model, flow.segmenters))
     shelf = Samples(samples, flow.blobs, flow.media, flow.media)
     app = FastAPI()
     app.include_router(web_router(runs, flow.sessions, shelf, flow.blobs))

@@ -7,8 +7,13 @@ from typing import NamedTuple
 import httpx
 
 from rewind.contracts import Attachment, Button, ChannelCapabilities, Charge, Reply
-from rewind.core.conversation import ActivityKind, AttachmentTooLargeError
-from rewind.core.ports import Completion, CompletionRequest, ToolCall
+from rewind.core.ports import (
+    ActivityKind,
+    AttachmentTooLargeError,
+    Completion,
+    CompletionRequest,
+    ToolCall,
+)
 
 
 class FakeBlobStore:
@@ -54,7 +59,10 @@ def replay(name: str, sent: list[httpx.Request], match: bool = True) -> httpx.As
     return httpx.AsyncClient(transport=httpx.MockTransport(handle))
 
 
-CAPABILITIES = ChannelCapabilities(max_text_chars=4096, max_media_bytes=50_000_000, max_buttons=8)
+CAPABILITIES = ChannelCapabilities(
+    max_text_chars=4096, max_media_bytes=50_000_000, max_buttons=8,
+    max_image_bytes=10_000_000, can_edit=True,
+)  # fmt: skip
 
 
 def completion(text: str = "", *calls: ToolCall, output_tokens: int = 50) -> Completion:
@@ -106,7 +114,9 @@ class FakeChannel:
         self.sent.append(Reply(channel=self.name, chat_id=chat_id, text=text, buttons=buttons))
         self.shown.append(Shown("progress", chat_id, text, key))
 
-    async def show_activity(self, chat_id: str, kind: ActivityKind) -> None:
+    async def show_activity(
+        self, chat_id: str, kind: ActivityKind, message_id: str | None = None
+    ) -> None:
         self.shown.append(Shown("activity", chat_id, kind))
 
     async def fetch_attachment(self, attachment: Attachment, destination: Path) -> None:

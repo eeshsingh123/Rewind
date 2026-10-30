@@ -26,6 +26,8 @@ Muse video check on the jar clip (60 s, contributor model): the belt stop right 
 
 - Web page (**real upload, ffmpeg and proof rendering checked in a browser, but with Muse and SAM scripted; not yet run against the APIs**). Served at `/` by the FastAPI app. Upload or tap a sample; each session has its own link at `/s/<id>`. A video gets a timeline of clickable markers (first look below, found answers above); steps show live; each answer has its proof inline and a quiet cost line. Drag a box: on a video the agent can `follow` it, on a photo it is the part to ask about. iPhone photos (HEIC) and videos (HEVC `.mov`, portrait) work end to end. An answer is kept by footage and question, so the same one is free in any session.
 
+- Telegram and WhatsApp on the agent (**scripted Muse and SAM only: no live run yet**). Both go through the same code in `core/ask/chat.py`; replies differ only by each channel's capabilities. Send a photo or a video: progress, then the first look with suggested questions to tap. A caption is the first question; any later message is about the latest footage, kept over a restart. A voice note in any language becomes the question through Meta's speech-to-text, and the answer comes back in that language. Each answer is one message with one proof, a cost line and, on a public address, a link to the full timeline. Telegram edits its progress in place. WhatsApp is code-ready: it needs only the keys below. The old flow is no longer wired in; its code is removed next.
+
 ## Next, in order
 
 Each phase is one branch and one PR, small enough for one session.
@@ -33,12 +35,11 @@ Each phase is one branch and one PR, small enough for one session.
 1. **Live check of the agent and the page.** Nothing in the agent has run against the APIs yet. Run `scripts/smoke_ask.py` on the s1 clip, then on a photo with a question about one area. Then try the page: upload, ask, drag a box to follow.
    Done when: on s1, "anything wrong?" names the stop with the right times, and "which jars have no label?" finds at least 3 of 4 with clips; on the photo, an area is marked and confirmed and its count is right; a dragged box is tracked.
 2. **Prime the samples.** `uv run python scripts/prime_samples.py` once the agent is good: it pays once, and every later tap is instant and free. Until then a sample opens but answers only when asked, and spends.
-3. **Telegram and WhatsApp on the new agent.** Send a photo or a video: the first look comes back with suggested questions as buttons. Ask anything. Progress is one message edited in place; the answer is one message with the clip. Remove lines, rule drafts and "Looks right" from the flow. Also:
-   - Voice notes in any language: Meta's speech-to-text turns the note into the question, and the answer comes back in the language asked.
-   - Every answer ends with "Open the full timeline", linking to that session's web page.
+3. **Live check on Telegram.** `scripts/smoke_telegram.py`, then from a phone: a video, a photo, a tap, a Hindi voice note.
    Done when: the same question gives the same answer on all three channels, and a Hindi voice note gets a Hindi answer.
-4. **Accuracy table.** Fixed questions on s1 and s2 scored against the answer keys: precision, recall, time error, cost, run time. A row for the owner's real clip (below), hand-labelled.
-5. **Submission.** README with a diagram, a 3-minute demo video, the written answers, credits.
+4. **Remove everything from before the pivot.** A PR of its own: `core/conversation/`, `core/rules/`, the old analysis and perception planner, their tables and tests. The chat flow must behave exactly as before.
+5. **Accuracy table.** Fixed questions on s1 and s2 scored against the answer keys: precision, recall, time error, cost, run time. A row for the owner's real clip (below), hand-labelled.
+6. **Submission.** README with a diagram, a 3-minute demo video, the written answers, credits.
 
 ## Only if time is left
 
@@ -63,7 +64,6 @@ If time runs short, cut from the bottom up. Never cut: proof clips, the accuracy
 
 ## Owner setup still open
 
-- [ ] WhatsApp keys (names in `.env.example`).
+- [ ] WhatsApp keys (names in `.env.example`, including `REWIND_WHATSAPP_BUSINESS_ACCOUNT_ID`). The WhatsApp webhook needs `uv run poe live` for a public address.
 - [ ] Film one real 1–2 minute phone clip with a known fault (for example, packing boxes on a table with one left untaped) and note the fault times. Used in the demo and the accuracy table.
-- [ ] A real shelf or store photo or video, to check changes on a second kind of footage. Save one photo as `data/samples/shelf.jpg`: it becomes the fourth sample; the page leaves it out until then.
-- [ ] Decide hosting before phase 3: judges try it live, and a tunnel to the laptop works only while it is on.
+- [ ] Decide hosting before the demo: judges try it live, and a tunnel to the laptop works only while it is on.

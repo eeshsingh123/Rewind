@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     whatsapp_app_id: str | None = None
     whatsapp_app_secret: SecretStr | None = None
     whatsapp_verify_token: SecretStr | None = None
+    # The WhatsApp Business Account, so its messages reach this app's webhook.
+    whatsapp_business_account_id: str | None = None
     # Comma-separated, in international format without the plus.
     whatsapp_allowed_numbers: Annotated[set[str], NoDecode] = Field(default_factory=set[str])
     # An analysis estimated above this asks for a confirm button first.

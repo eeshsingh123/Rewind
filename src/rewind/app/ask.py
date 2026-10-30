@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import httpx
 
 from rewind.adapters.models.muse import PRICES, MuseLanguageModel
+from rewind.adapters.models.muse_voice import MuseVoice
 from rewind.adapters.video.contact_sheet import OpenCvContactSheet
 from rewind.adapters.video.photo import PillowPhotos
 from rewind.adapters.video.proof_clip import OpenCvProofClips
@@ -21,11 +22,14 @@ from rewind.core.ask import (
     Toolset,
     Watcher,
 )
-from rewind.core.budget import BudgetedLanguageModel, BudgetScope, TokenPrices
-from rewind.core.ports import LanguageModel
+from rewind.core.budget import (
+    BudgetedLanguageModel,
+    BudgetedTranscriber,
+    BudgetScope,
+    TokenPrices,
+)
+from rewind.core.ports import LanguageModel, Transcriber
 
-# All web use shares one budget: the page is open to anyone with the link.
-WEB_WORKSPACE = "web"
 _CONVEYOR = "stock/pexels_5903898_packages_conveyor_720p.mp4"
 
 
@@ -37,6 +41,7 @@ class Ask:
     samples: Samples
     perception: Perception
     muse: MuseLanguageModel
+    voice: MuseVoice
     prices: TokenPrices
 
     # Every paid call goes through the budget guard; callers never see the raw adapters.
@@ -46,9 +51,12 @@ class Ask:
     def segmenters(self, scope: BudgetScope) -> Segmenters:
         return Segmenters(video=self.perception.video(scope), image=self.perception.image(scope))
 
-    def hands(self, session_id: str) -> tuple[LanguageModel, Segmenters]:
-        scope = BudgetScope(WEB_WORKSPACE, session_id)
+    def hands(self, workspace_id: str, session_id: str) -> tuple[LanguageModel, Segmenters]:
+        scope = BudgetScope(workspace_id, session_id)
         return self.model(scope), self.segmenters(scope)
+
+    def transcriber(self, workspace_id: str) -> Transcriber:
+        return BudgetedTranscriber(self.voice, self.perception.ledger, BudgetScope(workspace_id))
 
     def runs(self) -> Runs:
         return Runs(self.sessions, self.agent, self.hands)
@@ -90,5 +98,8 @@ def build_ask(settings: Settings, client: httpx.AsyncClient, perception: Percept
         samples=Samples(sample_footage(settings), blobs, perception.video_tools, photos),
         perception=perception,
         muse=muse,
+        voice=MuseVoice(
+            client, settings.meta_api_key.get_secret_value(), settings.meta_api_base_url
+        ),
         prices=TokenPrices("meta", price.input, price.output),
     )

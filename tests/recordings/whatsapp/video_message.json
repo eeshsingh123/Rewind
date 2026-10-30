@@ -8,16 +8,25 @@
           "field": "messages",
           "value": {
             "messaging_product": "whatsapp",
-            "metadata": {"display_phone_number": "15550000000", "phone_number_id": "PHONE_NUMBER_ID"},
-            "contacts": [{"profile": {"name": "Owner"}, "wa_id": "15551234567"}],
+            "metadata": {
+              "display_phone_number": "15550000000",
+              "phone_number_id": "PHONE_NUMBER_ID"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Owner"
+                },
+                "wa_id": "919800000000"
+              }
+            ],
             "messages": [
               {
-                "from": "15551234567",
+                "from": "919800000000",
                 "id": "wamid.TEST_VIDEO_1",
                 "timestamp": "1793260800",
                 "type": "video",
                 "video": {
-                  "caption": "Every carton needs a label before it leaves the view.",
                   "mime_type": "video/mp4",
                   "sha256": "abc",
                   "id": "MEDIA_ID_1"

@@ -4,11 +4,7 @@ from typing import Literal, Protocol
 
 from pydantic import JsonValue
 
-
-@dataclass(frozen=True, slots=True)
-class ChatRef:
-    channel: str
-    chat_id: str
+from rewind.core.ports import ChatRef
 
 
 @dataclass(frozen=True, slots=True)

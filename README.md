@@ -1,10 +1,11 @@
 # Rewind
 
-A camera checker you talk to through chat. Send a video of a packing or production line and write a rule in plain English ("every box needs a label when it leaves the view"). Rewind finds every item that broke the rule and replies with a proof clip, the item boxed in red. Rules also run over footage it has already seen, like Ctrl+F for your line.
+Ask your footage anything, from the web, Telegram or WhatsApp. Send a photo or a video and ask in plain words, by text or by voice note in any language, with no setup. Rewind shows each step as it works and answers with proof: a clip, or the photo with boxes drawn.
 
-- **SAM 3.1** finds and tracks the items and their parts.
-- **Muse Spark** turns each sentence into a strict rule and runs the chat.
-- **Plain code** decides. The rule engine is deterministic, so every answer is repeatable and backed by a clip.
+- **Muse Spark** looks at the footage, plans the steps and reasons.
+- **SAM 3.1** finds and tracks the items.
+- **Muse Voice** turns a voice note into the question.
+- **Plain code** counts, times, draws the proof and checks every claim against what the tools found.
 
 Built for the Meta AI Developer Hackathon, Indie track.
 
@@ -24,13 +25,15 @@ Start the app (Telegram works without a public URL):
 uv run poe serve
 ```
 
-Start it with a public tunnel instead, for WhatsApp and upload links (needs `cloudflared`):
+Start it with a public tunnel instead, for WhatsApp and the timeline links in chat replies (needs `cloudflared`):
 
 ```bash
 uv run poe live
 ```
 
-Then open http://127.0.0.1:8000 for the web page, or the bot in Telegram and send `/start`.
+Then open http://127.0.0.1:8000 for the web page, or the bot in Telegram and send a photo or a video.
+
+WhatsApp starts once its keys are set, with no code change: the token, phone number id, app id, app secret, verify token and business account id (names in `.env.example`). The token needs the `whatsapp_business_messaging` and `whatsapp_business_management` permissions. Start with `uv run poe live`; the app registers its webhook and subscribes the account itself.
 
 ## Develop
 
@@ -50,4 +53,4 @@ Live smoke runs against the real APIs (they cost money and never run in CI) are 
 
 ## Credits
 
-Stock footage from Pexels (credits beside each clip in `data/stock/`). Sim assets are listed in [sim/CREDITS.md](sim/CREDITS.md).
+Stock footage from Pexels (credits beside each clip in `data/stock/`). Sample shelf photo: ["Shelves with various milk boxes"](https://www.pexels.com/photo/shelves-with-various-milk-boxes-7451957/) by Nothing Ahead on Pexels. Sim assets are listed in [sim/CREDITS.md](sim/CREDITS.md).

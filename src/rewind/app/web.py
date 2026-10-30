@@ -17,7 +17,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from rewind.adapters.storage.local_disk import LocalDiskBlobStore
 from rewind.app.upload import MAX_UPLOAD_BYTES
 from rewind.contracts import Box
-from rewind.core.ask import Exchange, Kind, Marked, Runs, Samples, Session, Sessions
+from rewind.core.ask import (
+    SPENT,
+    Exchange,
+    Kind,
+    Marked,
+    Runs,
+    Samples,
+    Session,
+    Sessions,
+    footage_suffix,
+)
 from rewind.core.ports import BlobStoreError
 
 PAGE = Path(__file__).parent / "static"
@@ -26,7 +36,7 @@ _MEDIA_TTL_S = 6 * 3600
 _MEDIA_TYPES = {".mp4": "video/mp4", ".jpg": "image/jpeg"}
 # Smaller than this is a slip of the finger, not a mark.
 _MIN_BOX_SIDE = 0.01
-_SUFFIXES = {"image/heic": ".heic", "image/heif": ".heif", "video/quicktime": ".mov"}
+_SAMPLES_STILL_WORK = " The samples still work."
 
 
 class _View(BaseModel):
@@ -183,7 +193,7 @@ def web_router(
         if file.size is not None and file.size > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "That file is over 2 GB.")
         session_id = _new_id()
-        key = f"uploads/{session_id}/upload{_suffix(file)}"
+        key = f"uploads/{session_id}/upload{footage_suffix(file.filename, file.content_type)}"
         with tempfile.TemporaryDirectory() as workdir:
             local = Path(workdir) / "upload"
             await asyncio.to_thread(_copy, file, local)
@@ -211,7 +221,7 @@ def web_router(
             working=current.working,
             question=current.question,
             steps=tuple(StepView(text=s.text, done=s.done) for s in current.steps),
-            problem=current.problem,
+            problem=_shown(current.problem),
         )
 
     @router.post("/api/sessions/{session_id}/questions", status_code=202)
@@ -219,7 +229,7 @@ def web_router(
         found = await _get(sessions, session_id)
         if found is None:
             raise HTTPException(404, "no such session")
-        if not runs.ask(session_id, body.question.strip(), _marked(body, found)):
+        if runs.ask(session_id, body.question.strip(), _marked(body, found)) is None:
             raise HTTPException(409, "Still working on the last question.")
 
     @router.get("/media/{key:path}", include_in_schema=False)
@@ -264,15 +274,8 @@ def _marked(body: QuestionBody, session: Session) -> Marked | None:
     return Marked(box=box, t=min(body.at_s or 0.0, session.footage.duration_s))
 
 
-# The name decides between photo and video; a phone may send none, or one with no extension.
-def _suffix(file: UploadFile) -> str:
-    suffix = PurePosixPath(file.filename or "").suffix.lower()
-    if suffix.isascii() and suffix[1:].isalnum():
-        return suffix
-    kind = file.content_type or ""
-    if kind in _SUFFIXES:
-        return _SUFFIXES[kind]
-    return ".jpg" if kind.startswith("image/") else ".mp4"
+def _shown(problem: str | None) -> str | None:
+    return f"{SPENT}{_SAMPLES_STILL_WORK}" if problem == SPENT else problem
 
 
 def _copy(file: UploadFile, local: Path) -> None:

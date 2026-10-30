@@ -1,0 +1,48 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "1",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15551234567",
+              "phone_number_id": "1234567890"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Owner"
+                },
+                "wa_id": "919800000000"
+              }
+            ],
+            "messages": [
+              {
+                "from": "919800000000",
+                "id": "wamid.TEST",
+                "timestamp": "1793000000",
+                "type": "interactive",
+                "context": {
+                  "from": "15551234567",
+                  "id": "wamid.LIST"
+                },
+                "interactive": {
+                  "type": "list_reply",
+                  "list_reply": {
+                    "id": "",
+                    "title": "Which cartons have no",
+                    "description": "label?"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
