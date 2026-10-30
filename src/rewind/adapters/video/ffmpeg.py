@@ -5,12 +5,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from typing import Any
 
 from rewind.contracts import TimeSpan
 from rewind.core.ports import VideoInfo, VideoToolsError
 
 _SHOWINFO_PTS = re.compile(r"Parsed_showinfo.*?\bpts_time:\s*([0-9.eE+-]+)")
 _ENCODE = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p")
+_PLAYBACK_HEIGHT = 1080
 
 
 class FfmpegVideoTools:
@@ -24,6 +26,7 @@ class FfmpegVideoTools:
             "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height,avg_frame_rate,nb_frames,duration",
+            "-show_entries", "stream_side_data=rotation",
             "-show_entries", "format=duration",
             "-of", "json",
             str(source),
@@ -35,11 +38,15 @@ class FfmpegVideoTools:
         fps = float(Fraction(stream["avg_frame_rate"]))
         duration = float(stream.get("duration") or data["format"]["duration"])
         frame_count = int(stream.get("nb_frames") or round(duration * fps))
+        width, height = int(stream["width"]), int(stream["height"])
+        # Phones store a portrait video sideways; every decoder here turns it upright.
+        if _quarter_turned(stream):
+            width, height = height, width
         return VideoInfo(
             duration_s=duration,
             fps=fps,
-            width=int(stream["width"]),
-            height=int(stream["height"]),
+            width=width,
+            height=height,
             frame_count=frame_count,
         )
 
@@ -86,6 +93,16 @@ class FfmpegVideoTools:
             str(destination),
         )  # fmt: skip
 
+    async def playable(self, source: Path, destination: Path) -> None:
+        await _run(
+            self._ffmpeg,
+            "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+            "-i", str(source),
+            "-vf", f"scale=-2:'min({_PLAYBACK_HEIGHT},ih)'",
+            *_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
+            str(destination),
+        )  # fmt: skip
+
     async def still(self, source: Path, t: float, destination: Path) -> None:
         await _run(
             self._ffmpeg,
@@ -93,6 +110,12 @@ class FfmpegVideoTools:
             "-ss", f"{t:.3f}", "-i", str(source), "-frames:v", "1", "-q:v", "2",
             str(destination),
         )  # fmt: skip
+
+
+def _quarter_turned(stream: dict[str, Any]) -> bool:
+    return any(
+        int(side.get("rotation", 0)) % 180 == 90 for side in stream.get("side_data_list", ())
+    )
 
 
 @dataclass(frozen=True, slots=True)

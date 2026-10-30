@@ -9,10 +9,12 @@ from fastapi import APIRouter, FastAPI
 
 from rewind.adapters.channels.whatsapp import WEBHOOK_PATH, register_webhook, webhook_router
 from rewind.adapters.storage.sql import SqlRepository
+from rewind.app.ask import build_ask
 from rewind.app.chat import Chat, build_chat
 from rewind.app.perception import build_perception
 from rewind.app.settings import Settings
 from rewind.app.upload import upload_router
+from rewind.app.web import mount_page, web_router
 from rewind.core.conversation import MENU
 from rewind.core.ports import ChannelError
 
@@ -44,6 +46,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository = SqlRepository.from_url(settings.database_url_or_default)
     perception = build_perception(settings, client, repository)
     chat = build_chat(settings, client, repository, perception)
+    ask = build_ask(settings, client, perception)
+    runs = ask.runs()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -57,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            await runs.close()
             await client.aclose()
             await repository.close()
 
@@ -64,6 +69,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.include_router(router)
     app.include_router(upload_router(chat.conversation))
+    app.include_router(web_router(runs, ask.sessions, ask.samples, perception.blobs))
+    mount_page(app)
     if chat.whatsapp is not None:
         if settings.whatsapp_app_secret is None or settings.whatsapp_verify_token is None:
             raise RuntimeError("WhatsApp needs REWIND_WHATSAPP_APP_SECRET and _VERIFY_TOKEN")

@@ -13,7 +13,6 @@ from rewind.core.analysis import Mark, PartLooker
 from rewind.core.ask import (
     AskAgent,
     AskLimits,
-    Finding,
     Proofs,
     Segmenters,
     Sessions,
@@ -85,7 +84,7 @@ class Flow:
         proxies = ProxyMaker(blobs, self.media, 720)
         watcher = Watcher(blobs, proxies)
         ingest = Ingest(blobs, self.media, FakeActivity(), proxies, 2.0)
-        self.sessions = Sessions(blobs, ingest, watcher, self.media)
+        self.sessions = Sessions(blobs, ingest, watcher, self.media, self.media)
         store = ParquetObservationStore(blobs)
         stills = PartLooker(blobs, store, self.media)
         runner = PerceptionRunner(proxies, store)
@@ -137,8 +136,9 @@ async def test_a_question_is_answered_from_tool_evidence_with_proof(tmp_path: Pa
     assert isinstance(sent_back, ToolResultMessage)
     assert "not in the evidence cited: 3" in sent_back.text
     [finding] = answer.findings
-    assert finding == Finding(UNLABELLED, "seen", finding.proof_key)
+    assert (finding.text, finding.kind) == (UNLABELLED, "seen")
     assert finding.proof_key is not None
+    assert finding.span is not None
     assert video.drawn[0][0].tag == "no label"
     saved = await sessions.get("s1")
     assert saved is not None

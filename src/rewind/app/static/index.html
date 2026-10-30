@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Rewind</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%239c6b4e'/%3E%3Cpath d='M20 9v14l-11-7z' fill='%23fbf8f3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <a class="name" href="/">Rewind</a>
+    <button id="copy-link" class="quiet" type="button" hidden>Copy link</button>
+  </header>
+
+  <main id="home" hidden>
+    <h1>Ask your footage anything</h1>
+    <p class="lead">Send a photo or a video and ask in plain words. Every answer comes with proof.</p>
+    <label id="drop" class="drop">
+      <input id="file" type="file" accept="image/*,video/*,.heic,.heif,.mov">
+      <span id="drop-text">Drop a photo or a video here, or tap to choose</span>
+      <span id="upload-bar" class="bar" hidden><span></span></span>
+    </label>
+    <p id="home-problem" class="problem" hidden></p>
+    <section id="samples" hidden>
+      <h2>Or try one of these</h2>
+      <div id="sample-list" class="samples"></div>
+    </section>
+  </main>
+
+  <main id="desk" class="desk" hidden>
+    <section class="stage">
+      <div id="frame" class="frame">
+        <div id="waiting" class="waiting">Getting it ready</div>
+        <div id="marker" class="marker" hidden><div id="box" class="box" hidden></div></div>
+      </div>
+      <div id="timeline" class="timeline" hidden>
+        <div id="track" class="track"><div id="playhead" class="playhead"></div></div>
+        <div class="ends"><span>00:00</span><span id="end-time"></span></div>
+      </div>
+      <div class="tools">
+        <button id="mark" class="quiet" type="button" hidden></button>
+        <span id="mark-hint" class="hint" hidden></span>
+      </div>
+    </section>
+
+    <section class="talk">
+      <div id="log" class="log" aria-live="polite"></div>
+      <div id="suggested" class="suggested"></div>
+      <form id="ask" class="ask">
+        <div id="marked-chip" class="chip" hidden>
+          <span id="marked-text"></span>
+          <button id="unmark" class="quiet" type="button" aria-label="Remove the mark">×</button>
+        </div>
+        <div class="row">
+          <textarea id="question" rows="1" maxlength="500" placeholder="Ask anything" aria-label="Your question"></textarea>
+          <button id="send" type="submit">Ask</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

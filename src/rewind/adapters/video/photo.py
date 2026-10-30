@@ -1,7 +1,8 @@
 import asyncio
 from pathlib import Path
 
-import cv2
+from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 
 from rewind.core.ports import VideoToolsError
 
@@ -9,22 +10,25 @@ from rewind.core.ports import VideoToolsError
 _MAX_SIDE = 2048
 _QUALITY = 92
 
+# iPhones save HEIC by default, which OpenCV and ffmpeg's HEIF support both fail to read.
+register_heif_opener()
 
-class OpenCvPhotos:
+
+class PillowPhotos:
     async def upright(self, source: Path, destination: Path) -> tuple[int, int]:
         return await asyncio.to_thread(_upright, source, destination)
 
 
-# imread applies the camera's rotation, so every box from here on fits what a person sees.
+# Applies the camera's rotation, so every box from here on fits what a person sees.
 def _upright(source: Path, destination: Path) -> tuple[int, int]:
-    photo = cv2.imread(str(source))
-    if photo is None:
-        raise VideoToolsError(f"cannot read {source.name} as a photo")
-    height, width = photo.shape[:2]
-    scale = _MAX_SIDE / max(width, height)
-    if scale < 1:
-        width, height = round(width * scale), round(height * scale)
-        photo = cv2.resize(photo, (width, height), interpolation=cv2.INTER_AREA)
-    if not cv2.imwrite(str(destination), photo, [cv2.IMWRITE_JPEG_QUALITY, _QUALITY]):
-        raise VideoToolsError("could not write the photo")
-    return width, height
+    try:
+        with Image.open(source) as opened:
+            photo = ImageOps.exif_transpose(opened).convert("RGB")
+    except (OSError, ValueError, Image.DecompressionBombError) as error:
+        raise VideoToolsError(f"cannot read {source.name} as a photo") from error
+    photo.thumbnail((_MAX_SIDE, _MAX_SIDE), Image.Resampling.LANCZOS)
+    try:
+        photo.save(destination, "JPEG", quality=_QUALITY)
+    except OSError as error:
+        raise VideoToolsError("could not write the photo") from error
+    return photo.size

@@ -33,7 +33,7 @@ from rewind.core.analysis.replies import plural
 from rewind.core.analysis.timeline import Judged, find_stops, usual_gap
 from rewind.core.ask.areas import Area, AreaMarker, short_tag
 from rewind.core.ask.evidence import Evidence, Notebook
-from rewind.core.ask.session import Session
+from rewind.core.ask.session import Marked, Session
 from rewind.core.ask.watch import Watcher
 from rewind.core.perception import PerceptionRunner
 from rewind.core.ports import (
@@ -52,6 +52,9 @@ AROUND_S = 2.0
 TILES_PER_SHEET = 9
 # Most items one look covers; past this, the agent is told to ask about fewer.
 MAX_LOOK_ITEMS = 45
+# What follow names the thing a person dragged a box around; look then takes it as a thing.
+MARKED_THING = "marked thing"
+_FOLLOW_SHOWN_S = 10.0
 # Items listed by name in a result; the count always covers all of them.
 MAX_LISTED = 40
 _LOOK_PROMPT_VERSION = "2"
@@ -109,6 +112,7 @@ class Bench:
     areas: dict[str, Area] = field(default_factory=dict[str, Area])
     # Every paid call of the question, recorded as it is made, so a failed step still counts.
     charges: list[Charge] = field(default_factory=list[Charge])
+    marked: Marked | None = None
 
     @property
     def footage(self) -> Footage:
@@ -146,6 +150,10 @@ class AskTool(Protocol):
     @property
     def video_only(self) -> bool: ...
 
+    # Offered only when the question came with a dragged box.
+    @property
+    def needs_mark(self) -> bool: ...
+
     def as_tool(self) -> Tool: ...
 
     def start(self, raw_arguments: str) -> Started | str:
@@ -165,6 +173,7 @@ class ToolSpec[A: Arguments]:
     doing: Callable[[A], str]
     run: Callable[[Bench, A], Awaitable[Outcome]]
     video_only: bool = False
+    needs_mark: bool = False
 
     def as_tool(self) -> Tool:
         return Tool(self.name, self.description, self.arguments.model_json_schema())
@@ -222,6 +231,10 @@ class AreaArguments(Arguments):
         min_length=1, description="The part of the frame, in plain words: 'the left half'."
     )
     at_s: float | None = Field(None, description="The time of the frame; a photo needs none.")
+
+
+class FollowArguments(Arguments):
+    pass
 
 
 class Toolset:
@@ -285,6 +298,16 @@ class Toolset:
                 AreaArguments,
                 lambda a: f"Finding {_thing(a.name)}",
                 self.area,
+            ),
+            ToolSpec(
+                "follow",
+                "SAM follows what the person marked through the whole video. Says when it is "
+                "in view and where it goes, with a clip.",
+                FollowArguments,
+                lambda _: "Following what you marked",
+                self.follow,
+                video_only=True,
+                needs_mark=True,
             ),
         )
 
@@ -430,6 +453,42 @@ class Toolset:
         text = f"{name[0].upper()}{name[1:]} is marked on {frame}."
         evidence = bench.notebook.add("seen", text, clip, (area.mark,))
         return Outcome((evidence,), f"Marked {name}")
+
+    async def follow(self, bench: Bench, arguments: FollowArguments) -> Outcome:
+        marked = bench.marked
+        if marked is None:
+            raise ToolError("nothing was marked")
+        footage = bench.footage
+        result = await self._runner.follow(
+            footage, marked.t, marked.box, self._track_fps, bench.segmenters.video, MARKED_THING
+        )
+        bench.charges += result.charges
+        seen = sorted(result.observations, key=lambda o: o.t)
+        if not seen:
+            evidence = bench.notebook.add("seen", "What was marked could not be followed.")
+            return Outcome((evidence,), "Could not follow what you marked")
+        track = Track(
+            footage_id=footage.id,
+            track_id=MARKED_THING,
+            concept=MARKED_THING,
+            observations=tuple(seen),
+        )
+        item = Item(f"the {MARKED_THING}", track, _largest(seen))
+        bench.found[MARKED_THING] = (item,)
+        span = _seen(item)
+        path = tuple(Sighting(t=o.t, box=o.box) for o in seen)
+        text = (
+            f"The {MARKED_THING} is in view from {_span_text(span)} ({_length(span):.0f} s); "
+            f"{_route(seen[0].box, seen[-1].box)}."
+        )
+        mark = Mark(kind="flagged", tag="followed", path=path)
+        # A long track shows the stretch around where it was marked, not its start.
+        shown = TimeSpan(
+            start=max(span.start, marked.t - _FOLLOW_SHOWN_S),
+            end=min(span.end, marked.t + _FOLLOW_SHOWN_S),
+        )
+        evidence = bench.notebook.add("measured", text, shown, (mark,))
+        return Outcome((evidence,), f"Followed it from {_span_text(span)}")
 
     async def items(self, bench: Bench, thing: str) -> tuple[Item, ...]:
         if thing in bench.found:
@@ -578,6 +637,22 @@ def _row_name(number: int, rows: int) -> str:
 
 def _middle_y(box: Box) -> float:
     return (box.y0 + box.y1) / 2
+
+
+def _middle_x(box: Box) -> float:
+    return (box.x0 + box.x1) / 2
+
+
+def _route(first: Box, last: Box) -> str:
+    if max(abs(_middle_x(first) - _middle_x(last)), abs(_middle_y(first) - _middle_y(last))) < 0.1:
+        return f"it stays at the {_region(first)} of the frame"
+    return f"it goes from the {_region(first)} of the frame to the {_region(last)}"
+
+
+def _region(box: Box) -> str:
+    row = ("top", "", "bottom")[min(2, int(_middle_y(box) * 3))]
+    column = ("left", "", "right")[min(2, int(_middle_x(box) * 3))]
+    return f"{row} {column}".strip() or "middle"
 
 
 def _largest(observations: Sequence[Observation]) -> Observation:

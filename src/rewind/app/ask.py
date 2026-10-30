@@ -4,14 +4,29 @@ import httpx
 
 from rewind.adapters.models.muse import PRICES, MuseLanguageModel
 from rewind.adapters.video.contact_sheet import OpenCvContactSheet
-from rewind.adapters.video.photo import OpenCvPhotos
+from rewind.adapters.video.photo import PillowPhotos
 from rewind.adapters.video.proof_clip import OpenCvProofClips
 from rewind.app.perception import Perception
 from rewind.app.settings import Settings
 from rewind.core.analysis import PartLooker
-from rewind.core.ask import AskAgent, AskLimits, Proofs, Segmenters, Sessions, Toolset, Watcher
+from rewind.core.ask import (
+    AskAgent,
+    AskLimits,
+    Proofs,
+    Runs,
+    Sample,
+    Samples,
+    Segmenters,
+    Sessions,
+    Toolset,
+    Watcher,
+)
 from rewind.core.budget import BudgetedLanguageModel, BudgetScope, TokenPrices
 from rewind.core.ports import LanguageModel
+
+# All web use shares one budget: the page is open to anyone with the link.
+WEB_WORKSPACE = "web"
+_CONVEYOR = "stock/pexels_5903898_packages_conveyor_720p.mp4"
 
 
 # Upload, ask, watch it work: what every channel calls.
@@ -19,6 +34,7 @@ from rewind.core.ports import LanguageModel
 class Ask:
     sessions: Sessions
     agent: AskAgent
+    samples: Samples
     perception: Perception
     muse: MuseLanguageModel
     prices: TokenPrices
@@ -29,6 +45,23 @@ class Ask:
 
     def segmenters(self, scope: BudgetScope) -> Segmenters:
         return Segmenters(video=self.perception.video(scope), image=self.perception.image(scope))
+
+    def hands(self, session_id: str) -> tuple[LanguageModel, Segmenters]:
+        scope = BudgetScope(WEB_WORKSPACE, session_id)
+        return self.model(scope), self.segmenters(scope)
+
+    def runs(self) -> Runs:
+        return Runs(self.sessions, self.agent, self.hands)
+
+
+def sample_footage(settings: Settings) -> tuple[Sample, ...]:
+    data = settings.data_root
+    return (
+        Sample("jars", "Jars on a line", data / "sim/s1_jar_line-seed2/video.mp4"),
+        Sample("cartons", "Packing cartons", data / "sim/s2_carton_packing-seed2/video.mp4"),
+        Sample("conveyor", "Parcels on a conveyor", data / _CONVEYOR),
+        Sample("shelf", "A shop shelf", data / "samples/shelf.jpg"),
+    )
 
 
 def build_ask(settings: Settings, client: httpx.AsyncClient, perception: Perception) -> Ask:
@@ -44,7 +77,8 @@ def build_ask(settings: Settings, client: httpx.AsyncClient, perception: Percept
     )
     price = PRICES[settings.muse_model]
     watcher = Watcher(blobs, perception.proxies)
-    sessions = Sessions(blobs, perception.ingest, watcher, OpenCvPhotos())
+    photos = PillowPhotos()
+    sessions = Sessions(blobs, perception.ingest, watcher, photos, perception.video_tools)
     stills = PartLooker(blobs, perception.observations, perception.video_tools)
     tools = Toolset(
         blobs, watcher, perception.runner, stills, OpenCvContactSheet(), settings.track_fps
@@ -53,6 +87,7 @@ def build_ask(settings: Settings, client: httpx.AsyncClient, perception: Percept
     return Ask(
         sessions=sessions,
         agent=AskAgent(sessions, tools, proofs, AskLimits()),
+        samples=Samples(sample_footage(settings), blobs, perception.video_tools, photos),
         perception=perception,
         muse=muse,
         prices=TokenPrices("meta", price.input, price.output),

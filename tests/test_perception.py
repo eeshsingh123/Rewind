@@ -63,6 +63,9 @@ class FakeVideo:
     async def cut_clip(self, source: Path, destination: Path, span: TimeSpan) -> None:
         raise NotImplementedError
 
+    async def playable(self, source: Path, destination: Path) -> None:
+        raise NotImplementedError
+
 
 # Movement for the first four seconds of ten, then a stopped line.
 class FakeActivity:
